@@ -1,0 +1,20 @@
+[package]
+name = "alloc_test"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+alloc-rnb = { path = "dependencies/alloc-rnb" }
+
+# Allow cargo fmt and cargo test for all specified dependencies.
+# cargo fmt
+# cargo test --workspace
+[workspace]
+members = [
+    "dependencies/alloc-rnb"
+]
+
+[features]
+allocator_trait = ["alloc-rnb/allocator_trait"]
