@@ -82,12 +82,13 @@ unsafe impl GlobalAlloc for BuddyAllocator {
     }
 }
 
-#[global_allocator]
+// #[global_allocator]
 static ALLOCATOR: BuddyAllocator = BuddyAllocator::new(null(), 1024 * 1024 * 32);
 
 fn main() {
-    let _s = format!("allocating a string!");
+    let s = format!("allocating a string!");
+    println!("{}", s);
 
-    let b = Box::new_in(42, &ALLOCATOR);
-    dbg!(b);
+    // let b = Box::new_in(42, &ALLOCATOR);
+    // dbg!(b);
 }
