@@ -3,12 +3,5 @@
 version = 3
 
 [[package]]
-name = "alloc-rnb"
-version = "0.1.0"
-
-[[package]]
 name = "alloc_test"
 version = "0.1.0"
-dependencies = [
- "alloc-rnb",
-]
