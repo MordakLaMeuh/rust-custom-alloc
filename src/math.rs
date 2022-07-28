@@ -19,11 +19,10 @@ const IDX_ARRAY: [u32; 32] = [
 
 /// Count the consecutive zero bits (trailing) on the right with multiply and lookup
 #[inline(always)]
-pub fn trailing_zero_right(v: u32) -> u32 {
-    debug_assert_ne!(v, 0);
-    debug_assert_eq!(
-        -1_i32,
-        i32::from_ne_bytes([0xff, 0xff, 0xff, 0xff]),
+pub const fn trailing_zero_right(v: u32) -> u32 {
+    debug_assert!(v != 0);
+    debug_assert!(
+        -1_i32 == i32::from_ne_bytes([0xff, 0xff, 0xff, 0xff]),
         "this machine doesnt handle negatives numbers with two's complement representation"
     );
     // C  => idx = bits_right[((uint32_t)((v & -v) * 0x077CB531U)) >> 27] with v @int

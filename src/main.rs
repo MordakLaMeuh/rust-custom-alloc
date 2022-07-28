@@ -2,16 +2,20 @@
 #![deny(missing_docs)]
 #![feature(allocator_api)]
 #![feature(unchecked_math)]
+#![feature(slice_ptr_get)]
 #![feature(const_align_offset)]
 #![feature(const_mut_refs)]
-#![feature(slice_ptr_get)]
 #![feature(const_slice_index)]
 #![feature(const_option)]
-
+#![feature(const_inherent_unchecked_arith)]
+#![feature(const_convert)]
+#![feature(const_fmt_arguments_new)]
+#![feature(const_trait_impl)]
+#![feature(const_num_from_num)]
 mod buddy;
 mod math;
 
-use buddy::BuddyAllocator;
+pub use buddy::BuddyAllocator;
 
 use std::alloc::{handle_alloc_error, AllocError, Allocator, GlobalAlloc, Layout};
 use std::ptr::NonNull;
@@ -56,6 +60,7 @@ unsafe impl<'a> GlobalAlloc for BuddyAllocator<'a> {
 static ALLOCATOR: BuddyAllocator = BuddyAllocator::new(unsafe { &mut MEMORY_FIELD.array });
 
 fn main() {
+    println!("struct size: {}", std::mem::size_of::<BuddyAllocator>());
     let s = format!("allocating a string!");
     println!("{}", s);
 
