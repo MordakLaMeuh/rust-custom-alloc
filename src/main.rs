@@ -2,6 +2,7 @@
 #![feature(unchecked_math)]
 
 mod math;
+use math::{round_up_2, trailing_zero_right};
 
 use std::alloc::{handle_alloc_error, AllocError, Allocator, GlobalAlloc, Layout};
 use std::ptr::{null, null_mut, NonNull};
@@ -9,6 +10,7 @@ use std::sync::Mutex;
 
 /// TODO: Creation must be done when ProtectedAllocator::new is called
 const BUDDY: &'static [u8] = &[0_u8; 1024 * 1024];
+const MIN_BUDDY_SIZE: usize = 16;
 const MAX_SUPPORTED_ALIGN: usize = 4096;
 
 struct BuddyAllocator {
@@ -36,21 +38,51 @@ impl ProtectedAllocator {
     }
 }
 
+/// Requested buddy size with his TryFrom<Layout> boilerplate
+struct BuddySize(u32);
+
+impl TryFrom<Layout> for BuddySize {
+    type Error = &'static str;
+    fn try_from(layout: Layout) -> Result<Self, Self::Error> {
+        let size = usize::max(usize::max(layout.size(), layout.align()), MIN_BUDDY_SIZE);
+        match u32::try_from(size) {
+            Ok(size) => {
+                if size > 0x8000_0000 {
+                    Err("Size must be lower or eq than an half of u32")
+                } else if layout.align() > MAX_SUPPORTED_ALIGN {
+                    // TODO: Put MAX_SUPPORTED_ALIGN into static string
+                    Err("Alignement too big: MAX - {MAX_SUPPORTED_ALIGN}")
+                } else {
+                    Ok(BuddySize(round_up_2(size)))
+                }
+            }
+            Err(_e) => Err("Requested size must be fit into an u32"),
+        }
+    }
+}
+
 impl ProtectedAllocator {
     fn alloc(&mut self, layout: Layout) -> *mut u8 {
-        let size = layout.size();
-        let align = layout.align();
-
-        // `Layout` contract forbids making a `Layout` with align=0, or align not power of 2.
-        // So we can safely use a mask to ensure alignment without worrying about UB.
-        let align_mask_to_round_down = !(align - 1);
-
-        if align > MAX_SUPPORTED_ALIGN {
-            return null_mut();
+        match BuddySize::try_from(layout) {
+            Ok(buddy_size) => null_mut(),
+            Err(e) => {
+                eprintln!("{}", e);
+                null_mut()
+            }
         }
-        null_mut()
     }
     fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {}
+}
+// `Layout` contract forbids making a `Layout` with align=0, or align not power of 2.
+// So we can safely use a mask to ensure alignment without worrying about UB.
+// let align_mask_to_round_down = !(align - 1);
+
+impl Drop for BuddyAllocator {
+    fn drop(&mut self) {}
+}
+
+impl Drop for ProtectedAllocator {
+    fn drop(&mut self) {}
 }
 
 unsafe impl Allocator for BuddyAllocator {
@@ -89,6 +121,6 @@ fn main() {
     let s = format!("allocating a string!");
     println!("{}", s);
 
-    // let b = Box::new_in(42, &ALLOCATOR);
-    // dbg!(b);
+    let b = Box::new_in(42, &ALLOCATOR);
+    dbg!(b);
 }
