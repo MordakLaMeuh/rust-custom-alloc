@@ -11,6 +11,8 @@
 #![feature(const_trait_impl)]
 #![feature(const_num_from_num)]
 #![feature(const_result_drop)]
+#![feature(const_maybe_uninit_assume_init)]
+#![feature(const_maybe_uninit_as_mut_ptr)]
 // NOTE: Unwrapping Result<T, E> on const Fn is impossible for the moment
 // We use ok() to drop the Result and then just unwrapping the Option<T>
 // The associated feature for that is 'const_result_drop'
@@ -26,16 +28,6 @@ use std::ptr::NonNull;
 // Testing memory
 // RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo run  -Zbuild-std --target x86_64-unknown-linux-gnu
 // RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo test -Zbuild-std --target x86_64-unknown-linux-gnu
-
-// TODO: Creation must be done when ProtectedAllocator::new is called
-const MEMORY_FIELD_SIZE: usize = 1024 * 1024 * 32;
-#[repr(align(4096))]
-struct MemoryField {
-    pub array: [u8; MEMORY_FIELD_SIZE],
-}
-static mut MEMORY_FIELD: MemoryField = MemoryField {
-    array: [0; MEMORY_FIELD_SIZE],
-};
 
 unsafe impl<'a> Allocator for BuddyAllocator<'a> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
@@ -63,33 +55,51 @@ unsafe impl<'a> GlobalAlloc for BuddyAllocator<'a> {
     }
 }
 
+// TODO: Creation must be done when ProtectedAllocator::new is called
+const MEMORY_FIELD_SIZE: usize = 1024 * 1024 * 32;
+#[repr(align(4096))]
+struct MemoryField {
+    pub array: [u8; MEMORY_FIELD_SIZE],
+}
+// static mut MEMORY_FIELD: MemoryField = MemoryField {
+//     array: [0; MEMORY_FIELD_SIZE],
+// };
+static mut MEMORY_FIELD: std::mem::MaybeUninit<MemoryField> = std::mem::MaybeUninit::uninit();
+
 // #[global_allocator]
-static ALLOCATOR: BuddyAllocator = BuddyAllocator::new(unsafe { &mut MEMORY_FIELD.array });
+// static ALLOCATOR: BuddyAllocator = BuddyAllocator::new(unsafe { &mut MEMORY_FIELD.array });
+static ALLOCATOR: BuddyAllocator = BuddyAllocator::new(
+    unsafe {
+        // &mut MEMORY_FIELD.assume_init_mut().array
+        &mut (*(MEMORY_FIELD.as_mut_ptr())).array
+    }
+);
 
 fn main() {
     println!("struct size: {}", std::mem::size_of::<BuddyAllocator>());
     let s = format!("allocating a string!");
     println!("{}", s);
 
-    #[allow(unused)]
-    #[derive(Debug)]
-    struct Banane {
-        i: u64,
-        j: u64,
-        k: u64,
-        l: u64,
-        arr: [u64; 8],
-    }
-    let b = Box::new_in(
-        Banane {
-            i: 2,
-            j: 4,
-            k: 8,
-            l: 16,
-            arr: [42; 8],
-        },
-        &ALLOCATOR,
-    );
-    println!("struct size: {}", std::mem::size_of::<Banane>());
-    dbg!(b);
+    // let ALLOCATOR = BuddyAllocator::new(unsafe { &mut MEMORY_FIELD.array });
+    // #[allow(unused)]
+    // #[derive(Debug)]
+    // struct Banane {
+    //     i: u64,
+    //     j: u64,
+    //     k: u64,
+    //     l: u64,
+    //     arr: [u64; 8],
+    // }
+    // let b = Box::new_in(
+    //     Banane {
+    //         i: 2,
+    //         j: 4,
+    //         k: 8,
+    //         l: 16,
+    //         arr: [42; 8],
+    //     },
+    //     &ALLOCATOR,
+    // );
+    // println!("struct size: {}", std::mem::size_of::<Banane>());
+    // dbg!(b);
 }
