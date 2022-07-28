@@ -1,7 +1,7 @@
 /// Round up to the next highest power of 2
 #[inline(always)]
-pub fn round_up_2(mut v: u32) -> u32 {
-    debug_assert_ne!(v, 0);
+pub const fn round_up_2(mut v: u32) -> u32 {
+    debug_assert!(v != 0);
     v -= 1;
     v |= v >> 1;
     v |= v >> 2;
