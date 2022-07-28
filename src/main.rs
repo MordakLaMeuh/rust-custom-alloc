@@ -4,6 +4,9 @@
 #![feature(unchecked_math)]
 #![feature(const_align_offset)]
 #![feature(const_mut_refs)]
+#![feature(slice_ptr_get)]
+#![feature(const_slice_index)]
+#![feature(const_option)]
 
 mod math;
 use math::{round_up_2, trailing_zero_right};
@@ -22,62 +25,76 @@ static mut MEMORY_FIELD: MemoryField = MemoryField {
     array: [0; MEMORY_FIELD_SIZE],
 };
 
-const MIN_BUDDY_SIZE: u32 = 16;
-const MAX_BUDDY_SIZE: u32 = 0x8000_0000;
-const MAX_SUPPORTED_ALIGN: u32 = 4096;
+const MIN_BUDDY_SIZE: usize = 16;
+const MAX_BUDDY_SIZE: usize = 0x8000_0000;
+const MAX_SUPPORTED_ALIGN: usize = 4096;
 
 /// Buddy Allocator
-pub struct BuddyAllocator {
-    allocator: Mutex<ProtectedAllocator>,
+pub struct BuddyAllocator<'a> {
+    allocator: Mutex<ProtectedAllocator<'a>>,
 }
 
-impl BuddyAllocator {
+impl<'a> BuddyAllocator<'a> {
     /// Create a new Buddy Allocator on a previous allocated block
-    pub const fn new(address: *mut u8, space: u32) -> Self {
+    pub const fn new(address: &'a mut [u8]) -> Self {
         Self {
-            allocator: Mutex::new(ProtectedAllocator::new(address, space)),
+            allocator: Mutex::new(ProtectedAllocator::new(address)),
         }
     }
 }
 
 // TODO. on final time, this struct must be placed into a choosen memory location
 #[repr(C, align(4096))]
-struct ProtectedAllocator {
-    address: *mut u8,
-    space: u32,
+struct ProtectedAllocator<'a> {
+    address: &'a mut [u8],
 }
 
-impl ProtectedAllocator {
-    const fn new(address: *mut u8, space: u32) -> Self {
-        assert!(space <= MAX_BUDDY_SIZE); // Max limitation cf. 32b systems
-        assert!(space >= MIN_BUDDY_SIZE); // Min limitation cf. 32b systems
-        let space_rounded_up_2 = round_up_2(space);
-        let space_order0_buddy = if space_rounded_up_2 == space {
-            space
+impl<'a> ProtectedAllocator<'a> {
+    const fn new(address: &'a mut [u8]) -> Self {
+        assert!(address.len() <= MAX_BUDDY_SIZE); // Max limitation cf. 32b systems
+        assert!(address.len() >= MIN_BUDDY_SIZE); // Min limitation cf. 32b systems
+        let space_rounded_up_2 = round_up_2(address.len() as u32);
+        let space_order0_buddy = if space_rounded_up_2 == address.len() as u32 {
+            address.len() as u32
         } else {
             space_rounded_up_2 >> 1
         };
-        let min_aligned = if space > MAX_SUPPORTED_ALIGN {
+        let min_aligned = if address.len() > MAX_SUPPORTED_ALIGN {
             MAX_SUPPORTED_ALIGN
         } else {
-            space
+            address.len()
         };
-        let ptr_offset = address.align_offset(min_aligned as usize);
+        let ptr_offset = address.as_mut_ptr().align_offset(min_aligned as usize);
         // On launch time with const fn feature, align_offset() doesn't works and returns USIZE::MAX
         // Trust on you
         assert!(ptr_offset == 0 || ptr_offset == usize::MAX); // Check pointer alignement
         Self {
-            address,
-            space: space_order0_buddy,
+            address: address.get_mut(0..space_order0_buddy as usize).unwrap(),
         }
     }
     #[inline(always)]
-    fn set_mark(&mut self, order: Order) -> *mut u8 {
+    fn set_mark(&mut self, order: Order) -> NonNull<[u8]> {
+        // Recurse descent into orders
+        // if 0b00 | 0b01 go to the left
+        // if 0b10 go the the right
+        // if 0b00 and order is good, mark it
+        // set 1 bit to parent
+        // if 0b11 then recurse and set 0b11
         dbg!(order);
-        dbg!(self.address)
+        NonNull::from(&self.address[..])
     }
     #[inline(always)]
-    fn unset_mark(&mut self, order: Order, ptr: *mut u8) -> Result<(), &'static str> {
+    fn unset_mark(&mut self, order: Order, ptr: NonNull<u8>) -> Result<(), &'static str> {
+        // check ptr align with order
+        // let shr = 0 + (1 << order.0) + ptr(order);
+        // verify mask 0b10 % ptr offset
+        // set mask 0b00
+        // verify nex buddy if 0b10
+        // if 0b10 get 0 + (1 << (order.0 - 1)) + ptr(offset -> set as 0b01)
+        // Verify if 0b11
+        // if 0b00 get 0 + (1 << (order.0 - 1)) + ptr(offset -> set as 0b00)
+        // Verify if 0b10 or (0b01) ???
+        // END
         dbg!(order);
         dbg!(ptr);
         Ok(())
@@ -97,7 +114,7 @@ impl TryFrom<(BuddySize, u32)> for Order {
         let buddy_pow = trailing_zero_right(buddy_size.0);
         let space_pow = trailing_zero_right(space);
         if buddy_pow > space_pow {
-            Err("the bigger buddy is to small for the requested size")
+            Err("the bigger buddy is too small for the requested size")
         } else {
             Ok(Order(space_pow - buddy_pow))
         }
@@ -114,9 +131,9 @@ impl TryFrom<Layout> for BuddySize {
         );
         match u32::try_from(size) {
             Ok(size) => {
-                if size > MAX_BUDDY_SIZE {
+                if size as usize > MAX_BUDDY_SIZE {
                     Err("Size must be lower or eq than {MAX_BUDDY_SIZE}")
-                } else if layout.align() as u32 > MAX_SUPPORTED_ALIGN {
+                } else if layout.align() > MAX_SUPPORTED_ALIGN {
                     Err("Alignement too big: MAX - {MAX_SUPPORTED_ALIGN}")
                 } else {
                     Ok(BuddySize(round_up_2(size)))
@@ -127,27 +144,27 @@ impl TryFrom<Layout> for BuddySize {
     }
 }
 
-impl ProtectedAllocator {
+impl<'a> ProtectedAllocator<'a> {
     #[inline(always)]
-    fn alloc(&mut self, layout: Layout) -> *mut u8 {
+    fn alloc(&mut self, layout: Layout) -> Option<NonNull<[u8]>> {
         match BuddySize::try_from(layout) {
-            Ok(buddy_size) => match Order::try_from((buddy_size, self.space)) {
-                Ok(order) => self.set_mark(order),
+            Ok(buddy_size) => match Order::try_from((buddy_size, self.address.len() as u32)) {
+                Ok(order) => Some(self.set_mark(order)),
                 Err(e) => {
                     eprintln!("{}", e);
-                    null_mut()
+                    None
                 }
             },
             Err(e) => {
                 eprintln!("{}", e);
-                null_mut()
+                None
             }
         }
     }
     #[inline(always)]
-    fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
+    fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) {
         match BuddySize::try_from(layout) {
-            Ok(buddy_size) => match Order::try_from((buddy_size, self.space)) {
+            Ok(buddy_size) => match Order::try_from((buddy_size, self.address.len() as u32)) {
                 Ok(order) => self.unset_mark(order, ptr).unwrap(),
                 Err(e) => panic!("{}", e),
             },
@@ -156,48 +173,46 @@ impl ProtectedAllocator {
     }
 }
 
-impl Drop for BuddyAllocator {
+impl<'a> Drop for BuddyAllocator<'a> {
     fn drop(&mut self) {}
 }
 
-impl Drop for ProtectedAllocator {
+impl<'a> Drop for ProtectedAllocator<'a> {
     fn drop(&mut self) {}
 }
 
-unsafe impl Allocator for BuddyAllocator {
+unsafe impl<'a> Allocator for BuddyAllocator<'a> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let ptr = self.allocator.lock().unwrap().alloc(layout);
-        if ptr.is_null() {
-            handle_alloc_error(layout);
-        }
-        unsafe {
-            Ok(NonNull::new_unchecked(std::slice::from_raw_parts_mut(
-                ptr,
-                layout.size(),
-            )))
+        match self.allocator.lock().unwrap().alloc(layout) {
+            Some(memory_area) => Ok(memory_area),
+            None => handle_alloc_error(layout),
         }
     }
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        self.allocator.lock().unwrap().dealloc(ptr.as_ptr(), layout);
-    }
-}
-
-unsafe impl Sync for BuddyAllocator {}
-
-unsafe impl GlobalAlloc for BuddyAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        self.allocator.lock().unwrap().alloc(layout)
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         self.allocator.lock().unwrap().dealloc(ptr, layout);
     }
 }
 
+unsafe impl<'a> Sync for BuddyAllocator<'a> {}
+
+unsafe impl<'a> GlobalAlloc for BuddyAllocator<'a> {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if let Some(non_null) = self.allocator.lock().unwrap().alloc(layout) {
+            non_null.as_mut_ptr()
+        } else {
+            null_mut()
+        }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        self.allocator
+            .lock()
+            .unwrap()
+            .dealloc(NonNull::new(ptr).unwrap(), layout);
+    }
+}
+
 // #[global_allocator]
-static ALLOCATOR: BuddyAllocator =
-    BuddyAllocator::new(unsafe { MEMORY_FIELD.array.as_mut_ptr() }, unsafe {
-        MEMORY_FIELD.array.len() as u32
-    });
+static ALLOCATOR: BuddyAllocator = BuddyAllocator::new(unsafe { &mut MEMORY_FIELD.array });
 
 fn main() {
     let s = format!("allocating a string!");
