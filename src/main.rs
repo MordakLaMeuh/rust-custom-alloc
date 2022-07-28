@@ -1,17 +1,20 @@
 //! Custom Allocator based on buddy System
 #![deny(missing_docs)]
 #![feature(allocator_api)]
-#![feature(unchecked_math)]
 #![feature(slice_ptr_get)]
 #![feature(const_align_offset)]
 #![feature(const_mut_refs)]
 #![feature(const_slice_index)]
 #![feature(const_option)]
-#![feature(const_inherent_unchecked_arith)]
 #![feature(const_convert)]
 #![feature(const_fmt_arguments_new)]
 #![feature(const_trait_impl)]
 #![feature(const_num_from_num)]
+#![feature(const_result_drop)]
+// NOTE: Unwrapping Result<T, E> on const Fn is impossible for the moment
+// We use ok() to drop the Result and then just unwrapping the Option<T>
+// The associated feature for that is 'const_result_drop'
+
 mod buddy;
 mod math;
 
@@ -19,6 +22,10 @@ pub use buddy::BuddyAllocator;
 
 use std::alloc::{handle_alloc_error, AllocError, Allocator, GlobalAlloc, Layout};
 use std::ptr::NonNull;
+
+// Testing memory
+// RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo run  -Zbuild-std --target x86_64-unknown-linux-gnu
+// RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo test -Zbuild-std --target x86_64-unknown-linux-gnu
 
 // TODO: Creation must be done when ProtectedAllocator::new is called
 const MEMORY_FIELD_SIZE: usize = 1024 * 1024 * 32;

@@ -22,6 +22,18 @@ impl<'a> BuddyAllocator<'a> {
 // TODO. on final time, this struct must be placed into a choosen memory location
 pub struct ProtectedAllocator<'a>(&'a mut [u8]);
 
+macro_rules! max {
+    ($x: expr) => ($x);
+    ($x: expr, $($z: expr),+) => {{
+        let y = max!($($z),*);
+        if $x > y {
+            $x
+        } else {
+            y
+        }
+    }}
+}
+
 impl<'a> ProtectedAllocator<'a> {
     const fn new(address: &'a mut [u8]) -> Self {
         assert!(address.len() <= MAX_BUDDY_SIZE); // Max limitation cf. 32b systems
@@ -41,7 +53,30 @@ impl<'a> ProtectedAllocator<'a> {
         // On launch time with const fn feature, align_offset() doesn't works and returns USIZE::MAX
         // Trust on you
         assert!(ptr_offset == 0 || ptr_offset == usize::MAX); // Check pointer alignement
-        Self(address.get_mut(0..space_order0_buddy as usize).unwrap())
+        let max_order = Order::try_from((
+            BuddySize(MIN_BUDDY_SIZE as u32),
+            BuddySize(space_order0_buddy),
+        ))
+        .ok()
+        .expect("Woot ?");
+        // Bits needed:           2^(order) * 4 (-2 [2 bits are unusable])
+        // order 0.  2 bits       || xx
+        // order 1.  6 bits       ||    + || ||
+        // order 2. 14 bits       ||    + || || + || || || ||
+        // order 3. 30 bits       ||    + || || + || || || || + || || || || || || || ||
+        // [..]
+        let bytes_needed = max!((2_u32.pow(max_order.0) * 4) / 8, MIN_BUDDY_SIZE as u32);
+        // Bootstrap memory for metadata
+        let mut this = Self(address.get_mut(0..space_order0_buddy as usize).unwrap());
+        let _r = this
+            .alloc(
+                Layout::from_size_align(bytes_needed as usize, MIN_BUDDY_SIZE)
+                    .ok()
+                    .expect("Woot ?"),
+            )
+            .ok()
+            .expect("Woot ?");
+        this
     }
     #[inline(always)]
     const fn set_mark(&mut self, _order: Order) -> Result<NonNull<[u8]>, &'static str> {
@@ -79,13 +114,12 @@ struct BuddySize(u32);
 #[derive(Debug)]
 struct Order(u32);
 
-impl TryFrom<(BuddySize, BuddySize)> for Order {
+impl const TryFrom<(BuddySize, BuddySize)> for Order {
     type Error = &'static str;
     fn try_from((buddy_size, max_buddy_size): (BuddySize, BuddySize)) -> Result<Self, Self::Error> {
         // Assuming in RELEASE profile that buddy sizes are pow of 2
         debug_assert!(round_up_2(buddy_size.0) == buddy_size.0);
         debug_assert!(round_up_2(max_buddy_size.0) == max_buddy_size.0);
-        dbg!(&buddy_size);
         let buddy_pow = trailing_zero_right(buddy_size.0);
         let space_pow = trailing_zero_right(max_buddy_size.0);
         if buddy_pow > space_pow {
@@ -94,18 +128,6 @@ impl TryFrom<(BuddySize, BuddySize)> for Order {
             Ok(Order(space_pow - buddy_pow))
         }
     }
-}
-
-macro_rules! max {
-    ($x: expr) => ($x);
-    ($x: expr, $($z: expr),+) => {{
-        let y = max!($($z),*);
-        if $x > y {
-            $x
-        } else {
-            y
-        }
-    }}
 }
 
 // TODO: Put MAX_SUPPORTED_ALIGN & MAX_BUDDY_SIZE into static string
@@ -194,7 +216,7 @@ mod test {
         use super::{BuddySize, Layout};
         #[test]
         fn normal() {
-            let results = [
+            [
                 (4, 4, 16),
                 (16, 16, 16),
                 (4, 16, 16),
@@ -208,8 +230,9 @@ mod test {
                 (513, 16, 1024),
                 (5000, 64, 8192),
                 (0x4000_0010, 4096, 0x8000_0000),
-            ];
-            for (size, align, buddy_size) in results {
+            ]
+            .into_iter()
+            .for_each(|(size, align, buddy_size)| {
                 let layout = Layout::from_size_align(size, align)
                     .expect(format!("size {} align {}", size, align).as_str());
                 assert_eq!(
@@ -220,7 +243,7 @@ mod test {
                     align,
                     buddy_size
                 );
-            }
+            });
         }
         #[should_panic]
         #[test]
@@ -237,7 +260,7 @@ mod test {
         use super::{BuddySize, Order};
         #[test]
         fn normal() {
-            let results = [
+            [
                 (64, 64, 0),
                 (32, 64, 1),
                 (16, 64, 2),
@@ -246,8 +269,9 @@ mod test {
                 (1024, 4096, 2),
                 (2048, 4096, 1),
                 (4096, 4096, 0),
-            ];
-            for (curr, max, order) in results {
+            ]
+            .into_iter()
+            .for_each(|(curr, max, order)| {
                 assert_eq!(
                     Order::try_from((BuddySize(curr), BuddySize(max)))
                         .unwrap()
@@ -258,7 +282,7 @@ mod test {
                     max,
                     order
                 );
-            }
+            });
         }
         #[should_panic]
         #[test]

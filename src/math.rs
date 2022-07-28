@@ -27,9 +27,9 @@ pub const fn trailing_zero_right(v: u32) -> u32 {
     );
     // C  => idx = bits_right[((uint32_t)((v & -v) * 0x077CB531U)) >> 27] with v @int
     // (v & (!v + 1)) is eq to (v & -v) in two's complement representation
-    // unchecked_mul on Rust must output the same result like a lang C multiplication
-    let idx = (unsafe { (v & (!v + 1)).unchecked_mul(0x077C_B531) } >> 27) as usize;
-    IDX_ARRAY[idx]
+    // .overflowing_mul on Rust must output the same result like a lang C multiplication
+    let idx = (v & (!v + 1)).overflowing_mul(0x077C_B531).0 >> 27;
+    IDX_ARRAY[idx as usize]
 }
 
 #[cfg(test)]
