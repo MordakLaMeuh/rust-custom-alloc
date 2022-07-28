@@ -12,7 +12,7 @@ mod math;
 use math::{round_up_2, trailing_zero_right};
 
 use std::alloc::{handle_alloc_error, AllocError, Allocator, GlobalAlloc, Layout};
-use std::ptr::{null_mut, NonNull};
+use std::ptr::NonNull;
 use std::sync::Mutex;
 
 // TODO: Creation must be done when ProtectedAllocator::new is called
@@ -30,24 +30,18 @@ const MAX_BUDDY_SIZE: usize = 0x8000_0000;
 const MAX_SUPPORTED_ALIGN: usize = 4096;
 
 /// Buddy Allocator
-pub struct BuddyAllocator<'a> {
-    allocator: Mutex<ProtectedAllocator<'a>>,
-}
+pub struct BuddyAllocator<'a>(Mutex<ProtectedAllocator<'a>>);
 
 impl<'a> BuddyAllocator<'a> {
     /// Create a new Buddy Allocator on a previous allocated block
     pub const fn new(address: &'a mut [u8]) -> Self {
-        Self {
-            allocator: Mutex::new(ProtectedAllocator::new(address)),
-        }
+        Self(Mutex::new(ProtectedAllocator::new(address)))
     }
 }
 
 // TODO. on final time, this struct must be placed into a choosen memory location
 #[repr(C, align(4096))]
-struct ProtectedAllocator<'a> {
-    address: &'a mut [u8],
-}
+struct ProtectedAllocator<'a>(&'a mut [u8]);
 
 impl<'a> ProtectedAllocator<'a> {
     const fn new(address: &'a mut [u8]) -> Self {
@@ -68,12 +62,10 @@ impl<'a> ProtectedAllocator<'a> {
         // On launch time with const fn feature, align_offset() doesn't works and returns USIZE::MAX
         // Trust on you
         assert!(ptr_offset == 0 || ptr_offset == usize::MAX); // Check pointer alignement
-        Self {
-            address: address.get_mut(0..space_order0_buddy as usize).unwrap(),
-        }
+        Self(address.get_mut(0..space_order0_buddy as usize).unwrap())
     }
     #[inline(always)]
-    fn set_mark(&mut self, order: Order) -> NonNull<[u8]> {
+    fn set_mark(&mut self, order: Order) -> Result<NonNull<[u8]>, &'static str> {
         // Recurse descent into orders
         // if 0b00 | 0b01 go to the left
         // if 0b10 go the the right
@@ -81,7 +73,7 @@ impl<'a> ProtectedAllocator<'a> {
         // set 1 bit to parent
         // if 0b11 then recurse and set 0b11
         dbg!(order);
-        NonNull::from(&self.address[..])
+        Ok(NonNull::from(&self.0[..]))
     }
     #[inline(always)]
     fn unset_mark(&mut self, order: Order, ptr: NonNull<u8>) -> Result<(), &'static str> {
@@ -102,17 +94,17 @@ impl<'a> ProtectedAllocator<'a> {
 }
 
 // Requested Buddy Size and Order with their TryFrom<_> boilerplates
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct BuddySize(u32);
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Order(u32);
 
-impl TryFrom<(BuddySize, u32)> for Order {
+impl TryFrom<(BuddySize, BuddySize)> for Order {
     type Error = &'static str;
-    fn try_from((buddy_size, space): (BuddySize, u32)) -> Result<Self, Self::Error> {
+    fn try_from((buddy_size, max_buddy_size): (BuddySize, BuddySize)) -> Result<Self, Self::Error> {
         dbg!(&buddy_size);
         let buddy_pow = trailing_zero_right(buddy_size.0);
-        let space_pow = trailing_zero_right(space);
+        let space_pow = trailing_zero_right(max_buddy_size.0);
         if buddy_pow > space_pow {
             Err("the bigger buddy is too small for the requested size")
         } else {
@@ -144,27 +136,26 @@ impl TryFrom<Layout> for BuddySize {
     }
 }
 
+fn format_error(e: &'static str) -> AllocError {
+    eprintln!("{}", e);
+    AllocError
+}
+
 impl<'a> ProtectedAllocator<'a> {
     #[inline(always)]
-    fn alloc(&mut self, layout: Layout) -> Option<NonNull<[u8]>> {
+    fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         match BuddySize::try_from(layout) {
-            Ok(buddy_size) => match Order::try_from((buddy_size, self.address.len() as u32)) {
-                Ok(order) => Some(self.set_mark(order)),
-                Err(e) => {
-                    eprintln!("{}", e);
-                    None
-                }
+            Ok(buddy_size) => match Order::try_from((buddy_size, BuddySize(self.0.len() as u32))) {
+                Ok(order) => self.set_mark(order).map_err(|e| format_error(e)),
+                Err(e) => Err(format_error(e)),
             },
-            Err(e) => {
-                eprintln!("{}", e);
-                None
-            }
+            Err(e) => Err(format_error(e)),
         }
     }
     #[inline(always)]
     fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) {
         match BuddySize::try_from(layout) {
-            Ok(buddy_size) => match Order::try_from((buddy_size, self.address.len() as u32)) {
+            Ok(buddy_size) => match Order::try_from((buddy_size, BuddySize(self.0.len() as u32))) {
                 Ok(order) => self.unset_mark(order, ptr).unwrap(),
                 Err(e) => panic!("{}", e),
             },
@@ -183,13 +174,10 @@ impl<'a> Drop for ProtectedAllocator<'a> {
 
 unsafe impl<'a> Allocator for BuddyAllocator<'a> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        match self.allocator.lock().unwrap().alloc(layout) {
-            Some(memory_area) => Ok(memory_area),
-            None => handle_alloc_error(layout),
-        }
+        self.0.lock().unwrap().alloc(layout)
     }
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        self.allocator.lock().unwrap().dealloc(ptr, layout);
+        self.0.lock().unwrap().dealloc(ptr, layout);
     }
 }
 
@@ -197,14 +185,13 @@ unsafe impl<'a> Sync for BuddyAllocator<'a> {}
 
 unsafe impl<'a> GlobalAlloc for BuddyAllocator<'a> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if let Some(non_null) = self.allocator.lock().unwrap().alloc(layout) {
-            non_null.as_mut_ptr()
-        } else {
-            null_mut()
+        match self.0.lock().unwrap().alloc(layout) {
+            Ok(non_null) => non_null.as_mut_ptr(),
+            Err(_) => handle_alloc_error(layout),
         }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        self.allocator
+        self.0
             .lock()
             .unwrap()
             .dealloc(NonNull::new(ptr).unwrap(), layout);
