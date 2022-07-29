@@ -11,8 +11,6 @@
 #![feature(const_trait_impl)]
 #![feature(const_num_from_num)]
 #![feature(const_result_drop)]
-#![feature(const_maybe_uninit_assume_init)]
-#![feature(const_maybe_uninit_as_mut_ptr)]
 // NOTE: Unwrapping Result<T, E> on const Fn is impossible for the moment
 // We use ok() to drop the Result and then just unwrapping the Option<T>
 // The associated feature for that is 'const_result_drop'
@@ -20,7 +18,7 @@
 mod buddy;
 mod math;
 
-pub use buddy::BuddyAllocator;
+pub use buddy::{create_static_chunk, BuddyAllocator, StaticChunk};
 
 use std::alloc::{handle_alloc_error, AllocError, Allocator, GlobalAlloc, Layout};
 use std::ptr::NonNull;
@@ -55,51 +53,39 @@ unsafe impl<'a> GlobalAlloc for BuddyAllocator<'a> {
     }
 }
 
-// TODO: Creation must be done when ProtectedAllocator::new is called
 const MEMORY_FIELD_SIZE: usize = 1024 * 1024 * 32;
-#[repr(align(4096))]
-struct MemoryField {
-    pub array: [u8; MEMORY_FIELD_SIZE],
-}
-// static mut MEMORY_FIELD: MemoryField = MemoryField {
-//     array: [0; MEMORY_FIELD_SIZE],
-// };
-static mut MEMORY_FIELD: std::mem::MaybeUninit<MemoryField> = std::mem::MaybeUninit::uninit();
 
+static mut MEMORY_FIELD: StaticChunk<MEMORY_FIELD_SIZE> =
+    create_static_chunk::<MEMORY_FIELD_SIZE>();
 // #[global_allocator]
-// static ALLOCATOR: BuddyAllocator = BuddyAllocator::new(unsafe { &mut MEMORY_FIELD.array });
-static ALLOCATOR: BuddyAllocator = BuddyAllocator::new(
-    unsafe {
-        // &mut MEMORY_FIELD.assume_init_mut().array
-        &mut (*(MEMORY_FIELD.as_mut_ptr())).array
-    }
-);
+static ALLOCATOR: BuddyAllocator =
+    BuddyAllocator::attach_static_chunk(unsafe { &mut MEMORY_FIELD });
 
 fn main() {
     println!("struct size: {}", std::mem::size_of::<BuddyAllocator>());
     let s = format!("allocating a string!");
     println!("{}", s);
+    println!("ALL - {}", unsafe { MEMORY_FIELD.0[0] });
 
-    // let ALLOCATOR = BuddyAllocator::new(unsafe { &mut MEMORY_FIELD.array });
-    // #[allow(unused)]
-    // #[derive(Debug)]
-    // struct Banane {
-    //     i: u64,
-    //     j: u64,
-    //     k: u64,
-    //     l: u64,
-    //     arr: [u64; 8],
-    // }
-    // let b = Box::new_in(
-    //     Banane {
-    //         i: 2,
-    //         j: 4,
-    //         k: 8,
-    //         l: 16,
-    //         arr: [42; 8],
-    //     },
-    //     &ALLOCATOR,
-    // );
-    // println!("struct size: {}", std::mem::size_of::<Banane>());
-    // dbg!(b);
+    #[allow(unused)]
+    #[derive(Debug)]
+    struct Banane {
+        i: u64,
+        j: u64,
+        k: u64,
+        l: u64,
+        arr: [u64; 8],
+    }
+    let b = Box::new_in(
+        Banane {
+            i: 2,
+            j: 4,
+            k: 8,
+            l: 16,
+            arr: [42; 8],
+        },
+        &ALLOCATOR,
+    );
+    println!("struct size: {}", std::mem::size_of::<Banane>());
+    dbg!(b);
 }
