@@ -18,7 +18,7 @@
 mod buddy;
 mod math;
 
-pub use buddy::{create_static_chunk, BuddyAllocator, StaticChunk};
+use buddy::{create_static_chunk, BuddyAllocator, StaticChunk};
 
 use std::alloc::{handle_alloc_error, AllocError, Allocator, GlobalAlloc, Layout};
 use std::ptr::NonNull;
@@ -29,9 +29,16 @@ use std::ptr::NonNull;
 
 unsafe impl<'a> Allocator for BuddyAllocator<'a> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.0.lock().unwrap().alloc(layout)
+        println!("[Alloc size: {} align: {}]", layout.size(), layout.align());
+        dbg!(self.0.lock().unwrap().alloc(layout))
     }
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        println!(
+            "[Free size: {} align: {} ptr: {:?}]",
+            layout.size(),
+            layout.align(),
+            ptr
+        );
         self.0.lock().unwrap().dealloc(ptr, layout);
     }
 }
@@ -88,4 +95,51 @@ fn main() {
     );
     println!("struct size: {}", std::mem::size_of::<Banane>());
     dbg!(b);
+    #[repr(align(4096))]
+    struct MemChunk([u8; 2048]);
+    let mut chunk = MemChunk([0; 2048]);
+    let alloc2 = BuddyAllocator::new(&mut chunk.0);
+    dbg!(&alloc2 as *const _);
+    let arc = std::sync::Arc::new(alloc2); // Ask to allocate with custom allocator
+    dbg!(std::sync::Arc::as_ptr(&arc) as *const _);
+    let b = Box::new_in(
+        Banane {
+            i: 2,
+            j: 4,
+            k: 8,
+            l: 16,
+            arr: [42; 8],
+        },
+        &*arc,
+    );
+    dbg!(b);
+
+    // fn test<F>(mut c: F)
+    // where
+    //     F: FnMut()
+    // {
+    //     c();
+    // }
+    // let j = 42;
+    // let ptr: *mut u8 = std::ptr::null_mut();
+    // let c = || {
+    // };
+    // test(c);
+    // dbg!(ptr);
+
+    // block(c);
+
+    // block(|| {
+    //     dbg!(j);
+    //     dbg!(ptr);
+
+    // });
+
+    // pub fn block<F, T>(f: F) -> ()
+    // where
+    //     F: FnOnce() -> T,
+    //     F: Send + 'static
+    // {
+    //     f();
+    // }
 }

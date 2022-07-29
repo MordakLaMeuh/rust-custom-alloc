@@ -101,7 +101,6 @@ impl<'a> ProtectedAllocator<'a> {
     const fn attach_static_chunk<const SIZE: usize>(chunk: &'a mut StaticChunk<SIZE>) -> Self {
         Self(&mut chunk.0)
     }
-    #[inline(always)]
     const fn set_mark(&mut self, _order: Order) -> Result<NonNull<[u8]>, &'static str> {
         // Recurse descent into orders
         // if 0b00 | 0b01 go to the left
@@ -113,7 +112,6 @@ impl<'a> ProtectedAllocator<'a> {
         *self.0.get_mut(0).unwrap() = 42;
         Ok(NonNull::from(self.0.get_mut(..).unwrap()))
     }
-    #[inline(always)]
     fn unset_mark(&mut self, order: Order, ptr: NonNull<u8>) -> Result<(), &'static str> {
         // check ptr align with order
         // let shr = 0 + (1 << order.0) + ptr(order);
@@ -139,6 +137,7 @@ struct Order(u32);
 
 impl const TryFrom<(BuddySize, BuddySize)> for Order {
     type Error = &'static str;
+    #[inline(always)]
     fn try_from((buddy_size, max_buddy_size): (BuddySize, BuddySize)) -> Result<Self, Self::Error> {
         // Assuming in RELEASE profile that buddy sizes are pow of 2
         debug_assert!(round_up_2(buddy_size.0) == buddy_size.0);
@@ -156,18 +155,16 @@ impl const TryFrom<(BuddySize, BuddySize)> for Order {
 // TODO: Put MAX_SUPPORTED_ALIGN & MAX_BUDDY_SIZE into static string
 impl const TryFrom<Layout> for BuddySize {
     type Error = &'static str;
+    #[inline(always)]
     fn try_from(layout: Layout) -> Result<Self, Self::Error> {
-        let size = max!(layout.size(), layout.align(), MIN_BUDDY_SIZE as usize);
-        match u32::try_from(size) {
-            Ok(size) => {
-                if size as usize > MAX_BUDDY_SIZE {
-                    Err("Size must be lower or eq than {MAX_BUDDY_SIZE}")
-                } else if layout.align() > MAX_SUPPORTED_ALIGN {
-                    Err("Alignement too big: MAX - {MAX_SUPPORTED_ALIGN}")
-                } else {
-                    Ok(BuddySize(round_up_2(size)))
-                }
+        match u32::try_from(max!(layout.size(), layout.align(), MIN_BUDDY_SIZE)) {
+            Ok(size) if size as usize > MAX_BUDDY_SIZE => {
+                Err("Size must be lower or eq than {MAX_BUDDY_SIZE}")
             }
+            Ok(_size) if layout.align() > MAX_SUPPORTED_ALIGN => {
+                Err("Alignement too big: MAX - {MAX_SUPPORTED_ALIGN}")
+            }
+            Ok(size) => Ok(BuddySize(round_up_2(size))),
             Err(_e) => Err("Requested size must be fit into an u32"),
         }
     }
@@ -181,24 +178,19 @@ const fn format_error(e: &'static str) -> AllocError {
 }
 
 impl<'a> ProtectedAllocator<'a> {
-    #[inline(always)]
     pub const fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         match BuddySize::try_from(layout) {
             Ok(buddy_size) => match Order::try_from((buddy_size, BuddySize(self.0.len() as u32))) {
                 Ok(order) => match self.set_mark(order) {
                     Ok(non_null) => Ok(non_null),
                     // map_err(|e| ...) doesnot works in constant fn
-                    Err(e) => {
-                        format_error(e);
-                        Err(AllocError)
-                    }
+                    Err(e) => Err(format_error(e)),
                 },
                 Err(e) => Err(format_error(e)),
             },
             Err(e) => Err(format_error(e)),
         }
     }
-    #[inline(always)]
     pub fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) {
         match BuddySize::try_from(layout) {
             Ok(buddy_size) => match Order::try_from((buddy_size, BuddySize(self.0.len() as u32))) {
