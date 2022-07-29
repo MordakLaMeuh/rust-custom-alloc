@@ -5,7 +5,7 @@ use std::mem::forget;
 use std::ptr::NonNull;
 use std::sync::Mutex;
 
-const MIN_BUDDY_SIZE: usize = 16;
+const MIN_BUDDY_SIZE: usize = 64;
 const MAX_BUDDY_SIZE: usize = 0x8000_0000;
 const MAX_SUPPORTED_ALIGN: usize = 4096;
 
@@ -98,6 +98,7 @@ impl<'a> ProtectedAllocator<'a> {
             .expect("Woot ?");
         this
     }
+    const fn init_map(&mut self) {}
     const fn attach_static_chunk<const SIZE: usize>(chunk: &'a mut StaticChunk<SIZE>) -> Self {
         Self(&mut chunk.0)
     }
@@ -229,22 +230,23 @@ mod test {
 
     mod buddy_convert {
         use super::{BuddySize, Layout};
+        use super::{MAX_BUDDY_SIZE, MAX_SUPPORTED_ALIGN, MIN_BUDDY_SIZE};
         #[test]
         fn normal() {
             [
-                (4, 4, 16),
-                (16, 16, 16),
-                (4, 16, 16),
-                (0, 1, 16),
-                (0, 32, 32),
-                (1, 1, 16),
-                (1, 32, 32),
-                (30, 16, 32),
-                (17, 16, 32),
-                (96, 16, 128),
-                (513, 16, 1024),
-                (5000, 64, 8192),
-                (0x4000_0010, 4096, 0x8000_0000),
+                (MIN_BUDDY_SIZE / 4, MIN_BUDDY_SIZE / 4, MIN_BUDDY_SIZE),
+                (MIN_BUDDY_SIZE, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE),
+                (MIN_BUDDY_SIZE / 4, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE),
+                (0, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE),
+                (0, MIN_BUDDY_SIZE * 2, MIN_BUDDY_SIZE * 2),
+                (1, 1, MIN_BUDDY_SIZE),
+                (1, MIN_BUDDY_SIZE * 2, MIN_BUDDY_SIZE * 2),
+                (MIN_BUDDY_SIZE * 2 - 2, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE * 2),
+                (MIN_BUDDY_SIZE + 1, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE * 2),
+                (MIN_BUDDY_SIZE * 8, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE * 8),
+                (MIN_BUDDY_SIZE * 32 + 1, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE * 64),
+                (MIN_BUDDY_SIZE * 257, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE * 512),
+                (MAX_BUDDY_SIZE / 2 + 1, MAX_SUPPORTED_ALIGN, MAX_BUDDY_SIZE),
             ]
             .into_iter()
             .for_each(|(size, align, buddy_size)| {
@@ -252,7 +254,7 @@ mod test {
                     .expect(format!("size {} align {}", size, align).as_str());
                 assert_eq!(
                     BuddySize::try_from(layout).unwrap().0,
-                    BuddySize(buddy_size).0,
+                    BuddySize(buddy_size.try_into().unwrap()).0,
                     "size {} align {} resulut {}",
                     size,
                     align,
@@ -263,33 +265,40 @@ mod test {
         #[should_panic]
         #[test]
         fn unsuported_align_request() {
-            BuddySize::try_from(Layout::from_size_align(0x8000_0000, 8192).unwrap()).unwrap();
+            BuddySize::try_from(
+                Layout::from_size_align(MAX_BUDDY_SIZE, MAX_SUPPORTED_ALIGN * 2).unwrap(),
+            )
+            .unwrap();
         }
         #[should_panic]
         #[test]
         fn unsuported_size_request() {
-            BuddySize::try_from(Layout::from_size_align(0x9000_0000, 8192).unwrap()).unwrap();
+            BuddySize::try_from(
+                Layout::from_size_align(MAX_BUDDY_SIZE + 0x1000_0000, MAX_SUPPORTED_ALIGN).unwrap(),
+            )
+            .unwrap();
         }
     }
     mod order_convert {
         use super::{BuddySize, Order};
+        use super::{MAX_BUDDY_SIZE, MAX_SUPPORTED_ALIGN, MIN_BUDDY_SIZE};
         #[test]
         fn normal() {
             [
-                (64, 64, 0),
-                (32, 64, 1),
-                (16, 64, 2),
-                (16, 1024, 6),
-                (32, 1024, 5),
-                (1024, 4096, 2),
-                (2048, 4096, 1),
-                (4096, 4096, 0),
+                (MIN_BUDDY_SIZE, MIN_BUDDY_SIZE, 0),
+                (MIN_BUDDY_SIZE * 2, MIN_BUDDY_SIZE * 4, 1),
+                (MIN_BUDDY_SIZE * 4, MIN_BUDDY_SIZE * 16, 2),
+                (MIN_BUDDY_SIZE, MIN_BUDDY_SIZE * 64, 6),
+                (MIN_BUDDY_SIZE * 2, MIN_BUDDY_SIZE * 64, 5),
+                (MIN_BUDDY_SIZE * 64, MIN_BUDDY_SIZE * 256, 2),
+                (MIN_BUDDY_SIZE * 128, MIN_BUDDY_SIZE * 256, 1),
+                (MIN_BUDDY_SIZE * 256, MIN_BUDDY_SIZE * 256, 0),
             ]
             .into_iter()
             .for_each(|(curr, max, order)| {
                 assert_eq!(
-                    Order::try_from((BuddySize(curr), BuddySize(max)))
-                        .unwrap()
+                    Order::try_from((BuddySize(curr as u32), BuddySize(max as u32)))
+                        .expect(&format!("curr {} max {}", curr, max))
                         .0,
                     order,
                     "curr {} max {} order {}",
@@ -302,12 +311,20 @@ mod test {
         #[should_panic]
         #[test]
         fn out_of_order() {
-            Order::try_from((BuddySize(128), BuddySize(64))).unwrap();
+            Order::try_from((
+                BuddySize(MIN_BUDDY_SIZE as u32 * 8),
+                BuddySize(MIN_BUDDY_SIZE as u32 * 4),
+            ))
+            .unwrap();
         }
         #[should_panic]
         #[test]
         fn bad_buddy_size() {
-            Order::try_from((BuddySize(32), BuddySize(120))).unwrap();
+            Order::try_from((
+                BuddySize(MIN_BUDDY_SIZE as u32 * 2),
+                BuddySize(MIN_BUDDY_SIZE as u32 * 8 - 4),
+            ))
+            .unwrap();
         }
     }
     mod constructor {
