@@ -173,11 +173,10 @@ impl<'a> ProtectedAllocator<'a> {
             let (mut index, mut current_order) = (FIRST_INDEX, 0); // Begin on index 1
             while current_order < order {
                 // ___ Find the best fited block ___
-                let next_offset = index + (1 << current_order);
-                index = if self.0[next_offset] <= order {
-                    next_offset
+                index = if self.0[2 * index] <= order {
+                    2 * index // 2n --> binary heap
                 } else {
-                    next_offset + 1
+                    2 * index + 1 // 2n + 1 --> binary heap
                 };
                 debug_assert!(
                     current_order < self.0[index],
@@ -222,14 +221,8 @@ impl<'a> ProtectedAllocator<'a> {
     const fn mark_parents(&mut self, mut index: usize, mut order: Order) {
         while index > FIRST_INDEX {
             order.0 -= 1;
-            let previous_offset = index - (1 << order.0);
-            let parent = if index & 0b1 == 0 {
-                previous_offset
-            } else {
-                previous_offset - 1
-            };
-            let next_offset = parent + (1 << order.0);
-            let new_indice = min!(self.0[next_offset], self.0[next_offset + 1] & 0x7f);
+            let parent = index / 2; // 1/2n --> binary heap
+            let new_indice = min!(self.0[2 * parent], self.0[2 * parent + 1] & 0x7f);
             if self.0[parent] != new_indice {
                 self.0[parent] = new_indice;
             } else {
@@ -294,6 +287,35 @@ mod test {
     static mut MEMORY_FIELD: MemoryField = MemoryField {
         array: [0; MEMORY_FIELD_SIZE],
     };
+
+    mod allocator {
+        use crate::BuddyAllocator;
+        #[test]
+        fn fill_and_empty() {
+            #[repr(align(4096))]
+            struct MemChunk([u8; 256]);
+            let mut chunk = MemChunk([0; 256]);
+            let alloc = BuddyAllocator::new(&mut chunk.0);
+
+            let mut v = Vec::new();
+            for i in 0..4 {
+                let b = Box::try_new_in([0xaa_u8; 64], &alloc);
+                if let Err(e) = &b {
+                    panic!("Allocation error");
+                }
+                v.push(b);
+            }
+            let b = Box::try_new_in([0xaa_u8; 64], &alloc);
+            if let Ok(_) = b {
+                panic!("Should not allocate again");
+            }
+            drop(v);
+            let b = Box::try_new_in([0xaa_u8; 128], &alloc);
+            if let Err(e) = &b {
+                panic!("Allocation error");
+            }
+        }
+    }
 
     mod buddy_convert {
         use super::{BuddySize, Layout};

@@ -138,4 +138,27 @@ fn main() {
     dbg!(&d);
     drop(b);
     drop(c);
+
+    #[repr(align(4096))]
+    struct MemChunk2([u8; 256]);
+    let mut chunk = MemChunk2([0; 256]);
+    let alloc = BuddyAllocator::new(&mut chunk.0);
+
+    let mut v = Vec::new();
+    for _i in 0..3 {
+        let b = Box::try_new_in([0xaa_u8; 64], &alloc);
+        if let Err(_e) = &b {
+            panic!("Allocation error");
+        }
+        v.push(b);
+    }
+    let b = Box::try_new_in([0xaa_u8; 64], &alloc);
+    if let Ok(_) = b {
+        panic!("Should not allocate again");
+    }
+    drop(v);
+    let b = Box::try_new_in([0xaa_u8; 128], &alloc);
+    if let Err(_e) = &b {
+        panic!("Allocation error");
+    }
 }
