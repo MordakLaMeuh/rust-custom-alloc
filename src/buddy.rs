@@ -73,6 +73,17 @@ impl<'a> BuddyAllocator<'a> {
     ) -> Self {
         Self(Mutex::new(ProtectedAllocator::attach_static_chunk(address)))
     }
+    // TODO: Need to be private
+    /// Used only for debug purposes
+    pub fn debug(&self) {
+        for (i, v) in self.0.lock().unwrap().0.iter().enumerate() {
+            print!("{:02x} ", v);
+            if i != 0 && (i + 1) % 32 == 0 {
+                println!();
+            }
+        }
+        println!();
+    }
 }
 
 impl<'a> ProtectedAllocator<'a> {
@@ -161,7 +172,7 @@ impl<'a> ProtectedAllocator<'a> {
         } else {
             let (mut index, mut current_order) = (FIRST_INDEX, 0); // Begin on index 1
             while current_order < order {
-                // Find the best fited block
+                // ___ Find the best fited block ___
                 let next_offset = index + (1 << current_order);
                 index = if self.0[next_offset] <= order {
                     next_offset
@@ -174,10 +185,17 @@ impl<'a> ProtectedAllocator<'a> {
                 );
                 current_order += 1;
             }
-            self.0[index] |= 0x80;
-            self.0[index] += 1;
+            // ___ Mark as occupied with 0x80 then mark order as 'max order' + 1 ___
+            self.0[index] = 0x80
+                + Order::try_from((BuddySize(MIN_BUDDY_SIZE), BuddySize(self.0.len())))
+                    .ok()
+                    .expect("Woot ? Should be already checked !")
+                    .0
+                + 1;
+            // ___ Calculate the pointer offset of the coresponding memory chunk ___
             let alloc_offset =
                 self.0.len() / (1 << current_order) * (index & ((1 << current_order) - 1));
+            // ___ Report changes on parents ___
             self.mark_parents(index, Order(current_order));
             Ok(NonNull::from(
                 self.0
@@ -193,8 +211,9 @@ impl<'a> ProtectedAllocator<'a> {
         if self.0[index] & 0x80 == 0 {
             Err("Double Free or corruption")
         } else {
-            self.0[index] &= 0x7f;
-            self.0[index] -= 1;
+            // ___ Mark as free, like original value ___
+            self.0[index] = order.0;
+            // ___ Report changes on parents ___
             self.mark_parents(index, order);
             Ok(())
         }

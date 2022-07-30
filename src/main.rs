@@ -43,46 +43,22 @@ use std::ptr::NonNull;
 
 unsafe impl<'a> Allocator for BuddyAllocator<'a> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        for (i, v) in self.0.lock().unwrap().0.iter().enumerate() {
-            print!("{:02x} ", v);
-            if i != 0 && (i + 1) % 32 == 0 {
-                println!();
-            }
-        }
-        println!();
         println!("[Alloc size: {} align: {}]", layout.size(), layout.align());
-        let out = dbg!(self.0.lock().unwrap().alloc(layout));
-        for (i, v) in self.0.lock().unwrap().0.iter().enumerate() {
-            print!("{:02x} ", v);
-            if i != 0 && (i + 1) % 32 == 0 {
-                println!();
-            }
-        }
-        println!();
+        self.debug();
+        let out = self.0.lock().unwrap().alloc(layout);
+        self.debug();
         out
     }
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        for (i, v) in self.0.lock().unwrap().0.iter().enumerate() {
-            print!("{:02x} ", v);
-            if i != 0 && (i + 1) % 32 == 0 {
-                println!();
-            }
-        }
-        println!();
         println!(
             "[Free size: {} align: {} ptr: {:?}]",
             layout.size(),
             layout.align(),
             ptr
         );
+        self.debug();
         self.0.lock().unwrap().dealloc(ptr, layout);
-        for (i, v) in self.0.lock().unwrap().0.iter().enumerate() {
-            print!("{:02x} ", v);
-            if i != 0 && (i + 1) % 32 == 0 {
-                println!();
-            }
-        }
-        println!();
+        self.debug();
     }
 }
 
@@ -90,16 +66,28 @@ unsafe impl<'a> Sync for BuddyAllocator<'a> {}
 
 unsafe impl<'a> GlobalAlloc for BuddyAllocator<'a> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        match self.0.lock().unwrap().alloc(layout) {
+        println!("[Alloc size: {} align: {}]", layout.size(), layout.align());
+        self.debug();
+        let out = match self.0.lock().unwrap().alloc(layout) {
             Ok(non_null) => non_null.as_mut_ptr(),
             Err(_) => handle_alloc_error(layout),
-        }
+        };
+        self.debug();
+        out
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        println!(
+            "[Free size: {} align: {} ptr: {:?}]",
+            layout.size(),
+            layout.align(),
+            ptr
+        );
+        self.debug();
         self.0
             .lock()
             .unwrap()
             .dealloc(NonNull::new(ptr).unwrap(), layout);
+        self.debug();
     }
 }
 
@@ -125,21 +113,10 @@ fn main() {
         l: u64,
         arr: [u64; 8],
     }
-    let b = Box::new_in(
-        Banane {
-            i: 2,
-            j: 4,
-            k: 8,
-            l: 16,
-            arr: [42; 8],
-        },
-        &ALLOCATOR,
-    );
     println!("struct size: {}", std::mem::size_of::<Banane>());
-    dbg!(b);
     #[repr(align(4096))]
-    struct MemChunk([u8; 512]);
-    let mut chunk = MemChunk([0; 512]);
+    struct MemChunk([u8; 256]);
+    let mut chunk = MemChunk([0; 256]);
     let alloc2 = BuddyAllocator::new(&mut chunk.0);
     dbg!(&alloc2 as *const _);
     let arc = std::sync::Arc::new(alloc2); // Ask to allocate with custom allocator
@@ -155,5 +132,10 @@ fn main() {
         &*arc,
     );
     dbg!(&b);
+    let c = Box::new_in(0xAABBCCDD_u32, &*arc);
+    dbg!(&c);
+    let d = Box::try_new_in(0xAABBCCDD_u32, &*arc);
+    dbg!(&d);
     drop(b);
+    drop(c);
 }
