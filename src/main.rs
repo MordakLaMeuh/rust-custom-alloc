@@ -41,7 +41,7 @@ use buddy::{create_static_chunk, BuddyAllocator, StaticChunk};
 use std::alloc::{handle_alloc_error, AllocError, Allocator, GlobalAlloc, Layout};
 use std::ptr::NonNull;
 
-unsafe impl<'a> Allocator for BuddyAllocator<'a> {
+unsafe impl<'a, const M: usize> Allocator for BuddyAllocator<'a, M> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         println!("[Alloc size: {} align: {}]", layout.size(), layout.align());
         self.debug();
@@ -62,9 +62,9 @@ unsafe impl<'a> Allocator for BuddyAllocator<'a> {
     }
 }
 
-unsafe impl<'a> Sync for BuddyAllocator<'a> {}
+unsafe impl<'a, const M: usize> Sync for BuddyAllocator<'a, M> {}
 
-unsafe impl<'a> GlobalAlloc for BuddyAllocator<'a> {
+unsafe impl<'a, const M: usize> GlobalAlloc for BuddyAllocator<'a, M> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // println!("[Alloc size: {} align: {}]", layout.size(), layout.align());
         // self.debug();
@@ -92,11 +92,12 @@ unsafe impl<'a> GlobalAlloc for BuddyAllocator<'a> {
 }
 
 const MEMORY_FIELD_SIZE: usize = 512 * 1024 * 32;
+const MIN_CELL_LEN: usize = 64;
 
-static mut MEMORY_FIELD: StaticChunk<MEMORY_FIELD_SIZE> =
-    create_static_chunk::<MEMORY_FIELD_SIZE>();
+static mut MEMORY_FIELD: StaticChunk<MEMORY_FIELD_SIZE, { MIN_CELL_LEN * 2 }> =
+    create_static_chunk();
 #[global_allocator]
-static ALLOCATOR: BuddyAllocator =
+static ALLOCATOR: BuddyAllocator<{ MIN_CELL_LEN * 2 }> =
     BuddyAllocator::attach_static_chunk(unsafe { &mut MEMORY_FIELD });
 
 fn main() {
@@ -117,7 +118,7 @@ fn main() {
     #[repr(align(4096))]
     struct MemChunk([u8; 256]);
     let mut chunk = MemChunk([0; 256]);
-    let alloc2 = BuddyAllocator::new(&mut chunk.0);
+    let alloc2: BuddyAllocator<64> = BuddyAllocator::new(&mut chunk.0);
     dbg!(&alloc2 as *const _);
     let arc = std::sync::Arc::new(alloc2); // Ask to allocate with custom allocator
     dbg!(std::sync::Arc::as_ptr(&arc) as *const _);
@@ -142,7 +143,7 @@ fn main() {
     #[repr(align(4096))]
     struct MemChunk2([u8; 256]);
     let mut chunk = MemChunk2([0; 256]);
-    let alloc = BuddyAllocator::new(&mut chunk.0);
+    let alloc: BuddyAllocator<128> = BuddyAllocator::new(&mut chunk.0);
 
     let mut v = Vec::new();
     for _i in 0..3 {
