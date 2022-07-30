@@ -17,7 +17,6 @@ pub struct StaticChunk<const SIZE: usize>(pub [u8; SIZE]);
 /// Be carefull, static chunks affect hugely the executable's size
 pub const fn create_static_chunk<const SIZE: usize>() -> StaticChunk<SIZE> {
     let mut area: [u8; SIZE] = [0; SIZE];
-    // TODO: Problem with alignement check ?!?
     forget(BuddyAllocator::new(&mut area));
     StaticChunk(area)
 }
@@ -39,7 +38,6 @@ impl<'a> BuddyAllocator<'a> {
     }
 }
 
-// TODO. on final time, this struct must be placed into a choosen memory location
 // TODO. Must be set as private
 pub struct ProtectedAllocator<'a>(pub &'a mut [u8]);
 
@@ -161,6 +159,8 @@ impl<'a> ProtectedAllocator<'a> {
         }
         self.0[index] |= 0x80;
         self.0[index] += 1;
+        let allocated_index = index;
+        let original_current_order = current_order;
         // TODO: Problem for order 0
         while index > 1 {
             if current_order == 0 {
@@ -173,13 +173,15 @@ impl<'a> ProtectedAllocator<'a> {
             } else {
                 previous_offset - 1
             };
-            let next_offset = previous_offset + 2_usize.pow(current_order as u32);
-            self.0[parent] = min!(self.0[next_offset], self.0[next_offset + 1]);
+            let next_offset = parent + 2_usize.pow(current_order as u32);
+            self.0[parent] = min!(self.0[next_offset] & 0x7f, self.0[next_offset + 1] & 0x7f);
             index = parent;
         }
+        let real_offset = self.0.len() / 2_usize.pow(original_current_order as u32)
+            * (allocated_index % 2_usize.pow(original_current_order as u32));
         Ok(NonNull::from(
             self.0
-                .get_mut(index..index + buddy_size.0 as usize)
+                .get_mut(real_offset..real_offset + buddy_size.0 as usize)
                 .unwrap(),
         ))
     }

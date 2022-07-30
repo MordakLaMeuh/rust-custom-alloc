@@ -1,17 +1,24 @@
 //! Custom Allocator based on buddy System
 #![deny(missing_docs)]
+// Allow use of custom allocator
 #![feature(allocator_api)]
+// Get a pointer from the beginning of the slice
 #![feature(slice_ptr_get)]
+// Const fn align_offset of std::ptr
 #![feature(const_align_offset)]
+// Use of mutable reference into const fn
 #![feature(const_mut_refs)]
+// Allow to use Index and IndexMut on slices in const fn
 #![feature(const_slice_index)]
+// Use of Option<T> in const fn
 #![feature(const_option)]
-#![feature(const_convert)]
-#![feature(const_fmt_arguments_new)]
 // Used for impl TryFrom boilerplates in const fn
+#![feature(const_convert)]
+// Allow to writes boilerplates with const before impl keyword
 #![feature(const_trait_impl)]
 // Allow use of Try operator ? on Result in const fn
 #![feature(const_try)]
+// allow to use From and Into on Integer an float types in const Fn
 #![feature(const_num_from_num)]
 // NOTE: Unwrapping Result<T, E> on const Fn is impossible for the moment
 // We use ok() to drop the Result and then just unwrapping the Option<T>
@@ -43,9 +50,24 @@ unsafe impl<'a> Allocator for BuddyAllocator<'a> {
         }
         println!();
         println!("[Alloc size: {} align: {}]", layout.size(), layout.align());
-        dbg!(self.0.lock().unwrap().alloc(layout))
+        let out = dbg!(self.0.lock().unwrap().alloc(layout));
+        for (i, v) in self.0.lock().unwrap().0.iter().enumerate() {
+            print!("{:02x} ", v);
+            if i != 0 && (i + 1) % 32 == 0 {
+                println!();
+            }
+        }
+        println!();
+        out
     }
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        for (i, v) in self.0.lock().unwrap().0.iter().enumerate() {
+            print!("{:02x} ", v);
+            if i != 0 && (i + 1) % 32 == 0 {
+                println!();
+            }
+        }
+        println!();
         println!(
             "[Free size: {} align: {} ptr: {:?}]",
             layout.size(),
@@ -53,6 +75,13 @@ unsafe impl<'a> Allocator for BuddyAllocator<'a> {
             ptr
         );
         self.0.lock().unwrap().dealloc(ptr, layout);
+        for (i, v) in self.0.lock().unwrap().0.iter().enumerate() {
+            print!("{:02x} ", v);
+            if i != 0 && (i + 1) % 32 == 0 {
+                println!();
+            }
+        }
+        println!();
     }
 }
 
@@ -108,21 +137,22 @@ fn main() {
     println!("struct size: {}", std::mem::size_of::<Banane>());
     dbg!(b);
     #[repr(align(4096))]
-    struct MemChunk([u8; 256]);
-    let mut chunk = MemChunk([0; 256]);
+    struct MemChunk([u8; 512]);
+    let mut chunk = MemChunk([0; 512]);
     let alloc2 = BuddyAllocator::new(&mut chunk.0);
     dbg!(&alloc2 as *const _);
     let arc = std::sync::Arc::new(alloc2); // Ask to allocate with custom allocator
     dbg!(std::sync::Arc::as_ptr(&arc) as *const _);
     let b = Box::new_in(
         Banane {
-            i: 2,
-            j: 4,
-            k: 8,
-            l: 16,
-            arr: [42; 8],
+            i: 0xAAAAAAAAAAAAAAAA,
+            j: 0xBBBBBBBBBBBBBBBB,
+            k: 0xCCCCCCCCCCCCCCCC,
+            l: 0xDDDDDDDDDDDDDDDD,
+            arr: [0xFFFFFFFFFFFFFFFF; 8],
         },
         &*arc,
     );
-    dbg!(b);
+    dbg!(&b);
+    drop(b);
 }
