@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 use std::sync::Mutex;
 
 const MIN_BUDDY_SIZE: usize = 64;
-const MAX_BUDDY_SIZE: usize = 0x8000_0000;
+const MAX_BUDDY_SIZE: usize = 0x2000_0000;
 const MAX_SUPPORTED_ALIGN: usize = 4096;
 
 /// Use only for static allocation
@@ -40,7 +40,8 @@ impl<'a> BuddyAllocator<'a> {
 }
 
 // TODO. on final time, this struct must be placed into a choosen memory location
-pub struct ProtectedAllocator<'a>(&'a mut [u8]);
+// TODO. Must be set as private
+pub struct ProtectedAllocator<'a>(pub &'a mut [u8]);
 
 macro_rules! max {
     ($x: expr) => ($x);
@@ -79,18 +80,44 @@ impl<'a> ProtectedAllocator<'a> {
         ))
         .ok()
         .expect("Woot ?");
-        // Bits needed:           2^(order) * 4 (-2 [2 bits are unusable])
-        // order 0.  2 bits       || xx
-        // order 1.  6 bits       ||    + || ||
-        // order 2. 14 bits       ||    + || || + || || || ||
-        // order 3. 30 bits       ||    + || || + || || || || + || || || || || || || ||
+        // Bytes needed:       2^(order) * 2
+        // order 0.  2o        X o
+        // order 1.  4o        X o + X X
+        // order 2.  8o        X o + X X + X X X X
+        // order 3. 16o        X o + X X + X X X X + X X X X X X X X
         // [..]
-        let bytes_needed = max!((2_u32.pow(max_order.0) * 4) / 8, MIN_BUDDY_SIZE as u32);
+        let bytes_needed = 2_u32.pow(max_order.0) * 2;
+        // Cannot use Iterator or IntoIterator in const fn, so we use the C style loop
+        // An other trouble is that 'bytes_needed' depend of inputs params on const fn
+        // it derives from SIZE then address.len(). So We have to hack the compiler to
+        // allow 'infinite' eval limit. #![feature(const_eval_limit)] && #![const_eval_limit = "0"]
+        let mut current_order = 0;
+        let mut members = 2;
+        // address.iter_mut().for_each(|v| {
+        //      members -= 1;
+        //      *v = current_order;
+        //      if members == 0 {
+        //         current_order += 1;
+        //         members = 2_usize.pow(current_order as u32);
+        //      }
+        // });
+        // Write original metadatas
+        let mut index: usize = 0;
+        while index < bytes_needed as usize {
+            members -= 1;
+            address[index as usize] = current_order;
+            if members == 0 {
+                current_order += 1;
+                members = 2_usize.pow(current_order as u32);
+            }
+            index += 1;
+        }
         // Bootstrap memory for metadata
         let mut this = Self(address.get_mut(0..space_order0_buddy as usize).unwrap());
+        let metadata_chunk_size = max!(bytes_needed, MIN_BUDDY_SIZE as u32);
         let _r = this
             .alloc(
-                Layout::from_size_align(bytes_needed as usize, MIN_BUDDY_SIZE)
+                Layout::from_size_align(metadata_chunk_size as usize, MIN_BUDDY_SIZE)
                     .ok()
                     .expect("Woot ?"),
             )
@@ -98,7 +125,6 @@ impl<'a> ProtectedAllocator<'a> {
             .expect("Woot ?");
         this
     }
-    const fn init_map(&mut self) {}
     const fn attach_static_chunk<const SIZE: usize>(chunk: &'a mut StaticChunk<SIZE>) -> Self {
         Self(&mut chunk.0)
     }
@@ -110,7 +136,6 @@ impl<'a> ProtectedAllocator<'a> {
         // set 1 bit to parent
         // if 0b11 then recurse and set 0b11
         // dbg!(order);
-        *self.0.get_mut(0).unwrap() = 42;
         Ok(NonNull::from(self.0.get_mut(..).unwrap()))
     }
     fn unset_mark(&mut self, order: Order, ptr: NonNull<u8>) -> Result<(), &'static str> {
@@ -219,7 +244,7 @@ mod test {
     use super::{BuddySize, Order, ProtectedAllocator};
     use super::{MAX_BUDDY_SIZE, MAX_SUPPORTED_ALIGN, MIN_BUDDY_SIZE};
 
-    const MEMORY_FIELD_SIZE: usize = 1024 * 1024 * 32;
+    const MEMORY_FIELD_SIZE: usize = MAX_BUDDY_SIZE;
     #[repr(align(4096))]
     struct MemoryField {
         pub array: [u8; MEMORY_FIELD_SIZE],
@@ -280,8 +305,8 @@ mod test {
         }
     }
     mod order_convert {
+        use super::MIN_BUDDY_SIZE;
         use super::{BuddySize, Order};
-        use super::{MAX_BUDDY_SIZE, MAX_SUPPORTED_ALIGN, MIN_BUDDY_SIZE};
         #[test]
         fn normal() {
             [

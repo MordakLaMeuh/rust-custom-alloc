@@ -8,12 +8,16 @@
 #![feature(const_option)]
 #![feature(const_convert)]
 #![feature(const_fmt_arguments_new)]
+// Used for impl TryFrom boilerplates
 #![feature(const_trait_impl)]
 #![feature(const_num_from_num)]
-#![feature(const_result_drop)]
 // NOTE: Unwrapping Result<T, E> on const Fn is impossible for the moment
 // We use ok() to drop the Result and then just unwrapping the Option<T>
 // The associated feature for that is 'const_result_drop'
+#![feature(const_result_drop)]
+// Allow to use const_looping see: https://github.com/rust-lang/rust/issues/93481
+#![feature(const_eval_limit)]
+#![const_eval_limit = "0"]
 
 mod buddy;
 mod math;
@@ -29,6 +33,11 @@ use std::ptr::NonNull;
 
 unsafe impl<'a> Allocator for BuddyAllocator<'a> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        for v in self.0.lock().unwrap().0.iter() {
+            // print!("{:#04x} ", v);
+            print!("{} ", v);
+        }
+        println!();
         println!("[Alloc size: {} align: {}]", layout.size(), layout.align());
         dbg!(self.0.lock().unwrap().alloc(layout))
     }
@@ -60,7 +69,7 @@ unsafe impl<'a> GlobalAlloc for BuddyAllocator<'a> {
     }
 }
 
-const MEMORY_FIELD_SIZE: usize = 1024 * 1024 * 32;
+const MEMORY_FIELD_SIZE: usize = 512;
 
 static mut MEMORY_FIELD: StaticChunk<MEMORY_FIELD_SIZE> =
     create_static_chunk::<MEMORY_FIELD_SIZE>();
@@ -96,8 +105,8 @@ fn main() {
     println!("struct size: {}", std::mem::size_of::<Banane>());
     dbg!(b);
     #[repr(align(4096))]
-    struct MemChunk([u8; 2048]);
-    let mut chunk = MemChunk([0; 2048]);
+    struct MemChunk([u8; 256]);
+    let mut chunk = MemChunk([0; 256]);
     let alloc2 = BuddyAllocator::new(&mut chunk.0);
     dbg!(&alloc2 as *const _);
     let arc = std::sync::Arc::new(alloc2); // Ask to allocate with custom allocator
@@ -114,32 +123,42 @@ fn main() {
     );
     dbg!(b);
 
-    // fn test<F>(mut c: F)
-    // where
-    //     F: FnMut()
-    // {
-    //     c();
-    // }
-    // let j = 42;
-    // let ptr: *mut u8 = std::ptr::null_mut();
-    // let c = || {
-    // };
-    // test(c);
-    // dbg!(ptr);
+    // // fn test<F>(mut c: F)
+    // // where
+    // //     F: FnMut()
+    // // {
+    // //     c();
+    // // }
+    // // let j = 42;
+    // // let ptr: *mut u8 = std::ptr::null_mut();
+    // // let c = || {
+    // // };
+    // // test(c);
+    // // dbg!(ptr);
 
-    // block(c);
+    // // block(c);
 
-    // block(|| {
-    //     dbg!(j);
-    //     dbg!(ptr);
+    // // block(|| {
+    // //     dbg!(j);
+    // //     dbg!(ptr);
 
+    // // });
+
+    // // pub fn block<F, T>(f: F) -> ()
+    // // where
+    // //     F: FnOnce() -> T,
+    // //     F: Send + 'static
+    // // {
+    // //     f();
+    // // }
+
+    // let mut a = [12, 34, 35];
+    // a.iter_mut().for_each(|v| {
+    //     *v *= 2;
+    // });
+    // a.iter_mut().for_each(|v| {
+    //     *v *= 2;
     // });
 
-    // pub fn block<F, T>(f: F) -> ()
-    // where
-    //     F: FnOnce() -> T,
-    //     F: Send + 'static
-    // {
-    //     f();
-    // }
+    // dbg!(a);
 }
