@@ -11,6 +11,7 @@ const MAX_SUPPORTED_ALIGN: usize = 4096;
 
 const FIRST_INDEX: usize = 1;
 
+// TODO: All this file exept macro must be copies into lib.rs
 /// Buddy Allocator
 #[repr(C, align(16))]
 pub struct BuddyAllocator<'a>(pub Mutex<ProtectedAllocator<'a>>);
@@ -28,6 +29,7 @@ struct Order(u8);
 #[repr(align(4096))]
 pub struct StaticChunk<const SIZE: usize>(pub [u8; SIZE]);
 
+// TODO: Send macros into a separated file with macro export
 macro_rules! max {
     ($x: expr) => ($x);
     ($x: expr, $($z: expr),+) => {{
@@ -185,10 +187,9 @@ impl<'a> ProtectedAllocator<'a> {
         }
     }
     fn unset_mark(&mut self, order: Order, ptr: NonNull<u8>) -> Result<(), &'static str> {
-        // TODO: Very approximative formulae, fix it
-        let index = FIRST_INDEX
-            + (1 << order.0)
-            + (((usize::from(ptr.addr())) - (&self.0 as *const _ as usize)) % MIN_BUDDY_SIZE);
+        let alloc_offset = usize::from(ptr.addr()) - (self.0.get(0).unwrap() as *const u8 as usize);
+        let start_idx = 1 << order.0;
+        let index = start_idx + (alloc_offset * (1 << order.0) / self.0.len());
         if self.0[index] & 0x80 == 0 {
             Err("Double Free or corruption")
         } else {
@@ -255,7 +256,7 @@ impl const TryFrom<Layout> for BuddySize {
 
 #[allow(unused_variables)]
 const fn format_error(e: &'static str) -> AllocError {
-    // TODO: Problem to for using println in const FN
+    // NOTE: Problem to for using println in const FN
     // eprintln!("{}", e);
     AllocError
 }
