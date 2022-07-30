@@ -27,7 +27,8 @@
 // Allow to use const_looping see: https://github.com/rust-lang/rust/issues/93481
 #![feature(const_eval_limit)]
 #![const_eval_limit = "0"]
-
+// Allow to use addr() fm on std::ptr
+#![feature(strict_provenance)]
 // Testing memory
 // RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo run  -Zbuild-std --target x86_64-unknown-linux-gnu
 // RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo test -Zbuild-std --target x86_64-unknown-linux-gnu

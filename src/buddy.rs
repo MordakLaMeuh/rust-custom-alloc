@@ -9,6 +9,8 @@ const MIN_BUDDY_SIZE: usize = 64;
 const MAX_BUDDY_SIZE: usize = 0x2000_0000;
 const MAX_SUPPORTED_ALIGN: usize = 4096;
 
+const FIRST_INDEX: usize = 1;
+
 /// Use only for static allocation
 #[repr(align(4096))]
 pub struct StaticChunk<const SIZE: usize>(pub [u8; SIZE]);
@@ -38,7 +40,7 @@ impl<'a> BuddyAllocator<'a> {
     }
 }
 
-// TODO. Must be set as private
+// TODO: Must be set as private
 pub struct ProtectedAllocator<'a>(pub &'a mut [u8]);
 
 macro_rules! max {
@@ -67,11 +69,11 @@ macro_rules! min {
 
 impl<'a> ProtectedAllocator<'a> {
     const fn new(address: &'a mut [u8]) -> Self {
-        assert!(address.len() <= MAX_BUDDY_SIZE); // Max limitation cf. 32b systems
+        assert!(address.len() <= MAX_BUDDY_SIZE);
         assert!(address.len() >= MIN_BUDDY_SIZE * 2);
-        let space_rounded_up_2 = round_up_2(address.len() as u32);
-        let space_order0_buddy = if space_rounded_up_2 == address.len() as u32 {
-            address.len() as u32
+        let space_rounded_up_2 = round_up_2(address.len() as u32) as usize;
+        let space_order0_buddy = if space_rounded_up_2 == address.len() {
+            address.len()
         } else {
             space_rounded_up_2 >> 1
         };
@@ -81,160 +83,136 @@ impl<'a> ProtectedAllocator<'a> {
             address.len()
         };
         let ptr_offset = address.as_mut_ptr().align_offset(current_align);
-        // On launch time with const fn feature, align_offset() doesn't works and returns USIZE::MAX
-        // Trust on you
+        // IMPORTANT: On compile time with const fn feature, align_offset() doesn't works
+        // and returns USIZE::MAX. Trust on you. Can't be sure...
         assert!(ptr_offset == 0 || ptr_offset == usize::MAX); // Check pointer alignement
-        let max_order = Order::try_from((
-            BuddySize(MIN_BUDDY_SIZE as u32),
-            BuddySize(space_order0_buddy),
-        ))
-        .ok()
-        .expect("Woot ?");
+        let max_order = Order::try_from((BuddySize(MIN_BUDDY_SIZE), BuddySize(space_order0_buddy)))
+            .ok()
+            .expect("Woot ? Should be already checked !");
         // Bytes needed:       2^(order) * 2
         // order 0.  2o        X o
         // order 1.  4o        X o + X X
         // order 2.  8o        X o + X X + X X X X
         // order 3. 16o        X o + X X + X X X X + X X X X X X X X
         // [..]
-        let bytes_needed = 2_u32.pow(max_order.0) * 2;
+        let bytes_needed = (1 << max_order.0) * 2;
         // Cannot use Iterator or IntoIterator in const fn, so we use the C style loop
-        // An other trouble is that 'bytes_needed' depend of inputs params on const fn
-        // it derives from SIZE then address.len(). So We have to hack the compiler to
+        // IMPORTANT: A huge problem is that 'bytes_needed' depends of inputs params on const fn
+        // it derives from <const SIZE: usize> so address.len(). So We have to hack the compiler to
         // allow 'infinite' eval limit. #![feature(const_eval_limit)] && #![const_eval_limit = "0"]
-        let mut current_order = 0;
-        let mut members = 2;
-        // address.iter_mut().for_each(|v| {
-        //      members -= 1;
-        //      *v = current_order;
-        //      if members == 0 {
-        //         current_order += 1;
-        //         members = 2_usize.pow(current_order as u32);
-        //      }
-        // });
-        // Write original metadatas
-        let mut index: usize = 0;
-        while index < bytes_needed as usize {
+        // ___ Write original metadatas ___
+        let (mut current_order, mut members, mut index) = (0, 2, 0);
+        while index < bytes_needed {
             members -= 1;
-            address[index as usize] = current_order;
+            address[index] = current_order;
             if members == 0 {
                 current_order += 1;
-                members = 2_usize.pow(current_order as u32);
+                members = 1 << current_order;
             }
             index += 1;
         }
-        // Bootstrap memory for metadata
-        let mut this = Self(address.get_mut(0..space_order0_buddy as usize).unwrap());
-        let metadata_chunk_size = max!(bytes_needed, MIN_BUDDY_SIZE as u32);
+        // ___ Bootstrap memory for metadata ___
+        let mut this = Self(address.get_mut(0..space_order0_buddy).unwrap());
+        let metadata_chunk_size = max!(bytes_needed, MIN_BUDDY_SIZE);
         let _r = this
             .alloc(
-                Layout::from_size_align(metadata_chunk_size as usize, MIN_BUDDY_SIZE)
+                Layout::from_size_align(metadata_chunk_size, MIN_BUDDY_SIZE)
                     .ok()
-                    .expect("Woot ?"),
+                    .expect("Woot ? At this point, all values are multiple of 2 !"),
             )
             .ok()
-            .expect("Woot ?");
+            .expect("Woot ? Already insuffisant memory ?!? That Buddy Allocator sucks !");
         this
     }
     const fn attach_static_chunk<const SIZE: usize>(chunk: &'a mut StaticChunk<SIZE>) -> Self {
         Self(&mut chunk.0)
     }
     const fn set_mark(&mut self, buddy_size: BuddySize) -> Result<NonNull<[u8]>, &'static str> {
-        let order = Order::try_from((buddy_size, BuddySize(self.0.len() as u32)))?;
-        let order = order.0 as u8;
-        let mut index = 1; // Begin on index 1
-        let mut current_order = 0;
-        // TODO: Problem for order 0
+        let order = Order::try_from((buddy_size, BuddySize(self.0.len())))?.0;
+        let (mut index, mut current_order) = (FIRST_INDEX, 0); // Begin on index 1
+        if order < self.0[FIRST_INDEX] {
+            return Err("Not enough room to swing a cat, a cat, the animal !");
+        }
         while current_order < order {
-            if self.0[index] > order {
-                return Err("Not enough room to swing a cat, a cat, the animal !");
+            // Find the best fited block
+            let next_offset = index + (1 << current_order);
+            index = if self.0[next_offset] <= order {
+                next_offset
             } else {
-                let next_offset = index + 2_usize.pow(current_order as u32);
-                index = if self.0[next_offset] <= order {
-                    next_offset
-                } else {
-                    next_offset + 1
-                }
-            }
+                next_offset + 1
+            };
+            debug_assert!(
+                current_order < self.0[index],
+                "Woot ? That's definitively sucks"
+            );
             current_order += 1;
         }
         self.0[index] |= 0x80;
         self.0[index] += 1;
-        let allocated_index = index;
-        let original_current_order = current_order;
-        // TODO: Problem for order 0
-        while index > 1 {
-            if current_order == 0 {
-                panic!("Sa mere");
-            }
-            current_order -= 1;
-            let previous_offset = index - 2_usize.pow(current_order as u32);
+        let alloc_offset =
+            self.0.len() / (1 << current_order) * (index & ((1 << current_order) - 1));
+        self.mark_parents(index, Order(current_order));
+        Ok(NonNull::from(
+            self.0
+                .get_mut(alloc_offset..alloc_offset + buddy_size.0)
+                .unwrap(),
+        ))
+    }
+    fn unset_mark(&mut self, order: Order, ptr: NonNull<u8>) -> Result<(), &'static str> {
+        // TODO: Very approximative formulae, fix it
+        let index = FIRST_INDEX
+            + (1 << order.0)
+            + (((usize::from(ptr.addr())) - (&self.0 as *const _ as usize)) % MIN_BUDDY_SIZE);
+        if self.0[index] & 0x80 == 0 {
+            Err("Double Free or corruption")
+        } else {
+            self.0[index] &= 0x7f;
+            self.0[index] -= 1;
+            self.mark_parents(index, order);
+            Ok(())
+        }
+    }
+    #[inline(always)]
+    const fn mark_parents(&mut self, mut index: usize, mut order: Order) {
+        while index > FIRST_INDEX {
+            order.0 -= 1;
+            let previous_offset = index - (1 << order.0);
             let parent = if index & 0b1 == 0 {
                 previous_offset
             } else {
                 previous_offset - 1
             };
-            let next_offset = parent + 2_usize.pow(current_order as u32);
-            self.0[parent] = min!(self.0[next_offset] & 0x7f, self.0[next_offset + 1] & 0x7f);
-            index = parent;
-        }
-        let real_offset = self.0.len() / 2_usize.pow(original_current_order as u32)
-            * (allocated_index % 2_usize.pow(original_current_order as u32));
-        Ok(NonNull::from(
-            self.0
-                .get_mut(real_offset..real_offset + buddy_size.0 as usize)
-                .unwrap(),
-        ))
-    }
-    fn unset_mark(&mut self, order: Order, ptr: NonNull<u8>) -> Result<(), &'static str> {
-        let order = order.0 as u8;
-        // TODO: Very approximative formulae, fix it
-        let mut index: usize = 1
-            + 2_usize.pow(order as u32) as usize
-            + (((ptr.as_ptr() as usize) - (&self.0 as *const _ as usize)) % MIN_BUDDY_SIZE);
-        if self.0[index] & 0x80 != 0x80 {
-            Err("Double Free or corruption")
-        } else {
-            self.0[index] &= 0x7f;
-            self.0[index] -= 1;
-            let mut current_order = order;
-            while index != 0 {
-                let previous_offset = index - 2_usize.pow(current_order as u32);
-                let parent = if index & 0b1 == 0 {
-                    previous_offset
-                } else {
-                    previous_offset - 1
-                };
-                let next_offset = previous_offset + 2_usize.pow(current_order as u32);
-                self.0[parent] = min!(self.0[next_offset], self.0[next_offset + 1]);
-                current_order -= 1;
-                index = parent;
+            let next_offset = parent + (1 << order.0);
+            let new_indice = min!(self.0[next_offset], self.0[next_offset + 1] & 0x7f);
+            if self.0[parent] != new_indice {
+                self.0[parent] = new_indice;
+            } else {
+                break; // Job finished
             }
-            dbg!(order);
-            dbg!(ptr);
-            Ok(())
+            index = parent;
         }
     }
 }
 
-// Requested Buddy Size and Order with their TryFrom<_> boilerplates
+// ___ Requested Buddy Size and Order with their TryFrom<_> boilerplates ___
 #[derive(Debug, Copy, Clone)]
-struct BuddySize(u32);
+struct BuddySize(usize);
 #[derive(Debug, Copy, Clone)]
-struct Order(u32);
+struct Order(u8);
 
 impl const TryFrom<(BuddySize, BuddySize)> for Order {
     type Error = &'static str;
     #[inline(always)]
     fn try_from((buddy_size, max_buddy_size): (BuddySize, BuddySize)) -> Result<Self, Self::Error> {
-        // Assuming in RELEASE profile that buddy sizes are pow of 2
-        debug_assert!(round_up_2(buddy_size.0) == buddy_size.0);
-        debug_assert!(round_up_2(max_buddy_size.0) == max_buddy_size.0);
-        let buddy_pow = trailing_zero_right(buddy_size.0);
-        let space_pow = trailing_zero_right(max_buddy_size.0);
+        // ___ Assuming in RELEASE profile that buddy sizes are pow of 2 ___
+        debug_assert!(round_up_2(buddy_size.0 as u32) == buddy_size.0 as u32);
+        debug_assert!(round_up_2(max_buddy_size.0 as u32) == max_buddy_size.0 as u32);
+        let buddy_pow = trailing_zero_right(buddy_size.0 as u32);
+        let space_pow = trailing_zero_right(max_buddy_size.0 as u32);
         if buddy_pow > space_pow {
             Err("the bigger buddy is too small for the requested size")
         } else {
-            Ok(Order(space_pow - buddy_pow))
+            Ok(Order((space_pow - buddy_pow) as u8))
         }
     }
 }
@@ -244,15 +222,13 @@ impl const TryFrom<Layout> for BuddySize {
     type Error = &'static str;
     #[inline(always)]
     fn try_from(layout: Layout) -> Result<Self, Self::Error> {
-        match u32::try_from(max!(layout.size(), layout.align(), MIN_BUDDY_SIZE)) {
-            Ok(size) if size as usize > MAX_BUDDY_SIZE => {
-                Err("Size must be lower or eq than {MAX_BUDDY_SIZE}")
-            }
-            Ok(_size) if layout.align() > MAX_SUPPORTED_ALIGN => {
-                Err("Alignement too big: MAX - {MAX_SUPPORTED_ALIGN}")
-            }
-            Ok(size) => Ok(BuddySize(round_up_2(size))),
-            Err(_e) => Err("Requested size must be fit into an u32"),
+        let size = max!(layout.size(), layout.align(), MIN_BUDDY_SIZE);
+        if size > MAX_BUDDY_SIZE {
+            Err("Size must be lower or eq than {MAX_BUDDY_SIZE}")
+        } else if layout.align() > MAX_SUPPORTED_ALIGN {
+            Err("Alignement too big: MAX - {MAX_SUPPORTED_ALIGN}")
+        } else {
+            Ok(BuddySize(round_up_2(size as u32) as usize))
         }
     }
 }
@@ -272,29 +248,18 @@ impl<'a> ProtectedAllocator<'a> {
                 // map_err(|e| ...) doesnot works in constant fn
                 Err(e) => Err(format_error(e)),
             },
-
             Err(e) => Err(format_error(e)),
         }
     }
     pub fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) {
         match BuddySize::try_from(layout) {
-            Ok(buddy_size) => match Order::try_from((buddy_size, BuddySize(self.0.len() as u32))) {
+            Ok(buddy_size) => match Order::try_from((buddy_size, BuddySize(self.0.len()))) {
                 Ok(order) => self.unset_mark(order, ptr).unwrap(),
                 Err(e) => panic!("{}", e),
             },
             Err(e) => panic!("{}", e),
         }
     }
-}
-
-impl<'a> Drop for BuddyAllocator<'a> {
-    fn drop(&mut self) {
-        println!("Drop Called");
-    }
-}
-
-impl<'a> Drop for ProtectedAllocator<'a> {
-    fn drop(&mut self) {}
 }
 
 #[cfg(test)]
@@ -381,7 +346,7 @@ mod test {
             .into_iter()
             .for_each(|(curr, max, order)| {
                 assert_eq!(
-                    Order::try_from((BuddySize(curr as u32), BuddySize(max as u32)))
+                    Order::try_from((BuddySize(curr), BuddySize(max)))
                         .expect(&format!("curr {} max {}", curr, max))
                         .0,
                     order,
@@ -395,18 +360,15 @@ mod test {
         #[should_panic]
         #[test]
         fn out_of_order() {
-            Order::try_from((
-                BuddySize(MIN_BUDDY_SIZE as u32 * 8),
-                BuddySize(MIN_BUDDY_SIZE as u32 * 4),
-            ))
-            .unwrap();
+            Order::try_from((BuddySize(MIN_BUDDY_SIZE * 8), BuddySize(MIN_BUDDY_SIZE * 4)))
+                .unwrap();
         }
         #[should_panic]
         #[test]
         fn bad_buddy_size() {
             Order::try_from((
-                BuddySize(MIN_BUDDY_SIZE as u32 * 2),
-                BuddySize(MIN_BUDDY_SIZE as u32 * 8 - 4),
+                BuddySize(MIN_BUDDY_SIZE * 2),
+                BuddySize(MIN_BUDDY_SIZE * 8 - 4),
             ))
             .unwrap();
         }
