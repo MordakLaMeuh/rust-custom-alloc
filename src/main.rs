@@ -66,36 +66,36 @@ unsafe impl<'a> Sync for BuddyAllocator<'a> {}
 
 unsafe impl<'a> GlobalAlloc for BuddyAllocator<'a> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        println!("[Alloc size: {} align: {}]", layout.size(), layout.align());
-        self.debug();
+        // println!("[Alloc size: {} align: {}]", layout.size(), layout.align());
+        // self.debug();
         let out = match self.0.lock().unwrap().alloc(layout) {
             Ok(non_null) => non_null.as_mut_ptr(),
             Err(_) => handle_alloc_error(layout),
         };
-        self.debug();
+        // self.debug();
         out
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        println!(
-            "[Free size: {} align: {} ptr: {:?}]",
-            layout.size(),
-            layout.align(),
-            ptr
-        );
-        self.debug();
+        // println!(
+        //     "[Free size: {} align: {} ptr: {:?}]",
+        //     layout.size(),
+        //     layout.align(),
+        //     ptr
+        // );
+        // self.debug();
         self.0
             .lock()
             .unwrap()
             .dealloc(NonNull::new(ptr).unwrap(), layout);
-        self.debug();
+        // self.debug();
     }
 }
 
-const MEMORY_FIELD_SIZE: usize = 512;
+const MEMORY_FIELD_SIZE: usize = 512 * 1024 * 32;
 
 static mut MEMORY_FIELD: StaticChunk<MEMORY_FIELD_SIZE> =
     create_static_chunk::<MEMORY_FIELD_SIZE>();
-// #[global_allocator]
+#[global_allocator]
 static ALLOCATOR: BuddyAllocator =
     BuddyAllocator::attach_static_chunk(unsafe { &mut MEMORY_FIELD });
 

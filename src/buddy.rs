@@ -225,18 +225,23 @@ impl<'a> ProtectedAllocator<'a> {
     #[inline(always)]
     const fn mark_parents(&mut self, mut index: usize, mut order: Order, op: Op) {
         while index > FIRST_INDEX {
-            order.0 -= 1;
             let parent = index / 2; // 1/2n --> binary heap
             let new_indice = match op {
-                Op::Allocate => min!(self.0[2 * parent], self.0[2 * parent + 1] & 0x7f),
-                // TODO: Write routine for deallocate here !
-                Op::Deallocate => min!(self.0[2 * parent], self.0[2 * parent + 1] & 0x7f),
+                Op::Allocate => min!(self.0[2 * parent] & 0x7f, self.0[2 * parent + 1] & 0x7f),
+                Op::Deallocate => {
+                    if self.0[2 * parent] == order.0 && self.0[2 * parent + 1] == order.0 {
+                        order.0 - 1
+                    } else {
+                        min!(self.0[2 * parent] & 0x7f, self.0[2 * parent + 1] & 0x7f)
+                    }
+                }
             };
             if self.0[parent] != new_indice {
                 self.0[parent] = new_indice;
             } else {
                 break; // Job finished
             }
+            order.0 -= 1;
             index = parent;
         }
     }
@@ -307,12 +312,8 @@ mod test {
             let alloc = BuddyAllocator::new(&mut chunk.0);
 
             let mut v = Vec::new();
-            for i in 0..4 {
-                let b = Box::try_new_in([0xaa_u8; 64], &alloc);
-                if let Err(e) = &b {
-                    panic!("Allocation error");
-                }
-                v.push(b);
+            for _ in 0..3 {
+                v.push(Box::try_new_in([0xaa_u8; 64], &alloc).expect("AError"));
             }
             let b = Box::try_new_in([0xaa_u8; 64], &alloc);
             if let Ok(_) = b {
@@ -320,7 +321,7 @@ mod test {
             }
             drop(v);
             let b = Box::try_new_in([0xaa_u8; 128], &alloc);
-            if let Err(e) = &b {
+            if let Err(_) = &b {
                 panic!("Allocation error");
             }
         }
