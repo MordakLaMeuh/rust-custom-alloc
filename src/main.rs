@@ -8,8 +8,10 @@
 #![feature(const_option)]
 #![feature(const_convert)]
 #![feature(const_fmt_arguments_new)]
-// Used for impl TryFrom boilerplates
+// Used for impl TryFrom boilerplates in const fn
 #![feature(const_trait_impl)]
+// Allow use of Try operator ? on Result in const fn
+#![feature(const_try)]
 #![feature(const_num_from_num)]
 // NOTE: Unwrapping Result<T, E> on const Fn is impossible for the moment
 // We use ok() to drop the Result and then just unwrapping the Option<T>
@@ -19,6 +21,10 @@
 #![feature(const_eval_limit)]
 #![const_eval_limit = "0"]
 
+// Testing memory
+// RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo run  -Zbuild-std --target x86_64-unknown-linux-gnu
+// RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo test -Zbuild-std --target x86_64-unknown-linux-gnu
+
 mod buddy;
 mod math;
 
@@ -27,15 +33,13 @@ use buddy::{create_static_chunk, BuddyAllocator, StaticChunk};
 use std::alloc::{handle_alloc_error, AllocError, Allocator, GlobalAlloc, Layout};
 use std::ptr::NonNull;
 
-// Testing memory
-// RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo run  -Zbuild-std --target x86_64-unknown-linux-gnu
-// RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo test -Zbuild-std --target x86_64-unknown-linux-gnu
-
 unsafe impl<'a> Allocator for BuddyAllocator<'a> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        for v in self.0.lock().unwrap().0.iter() {
-            // print!("{:#04x} ", v);
-            print!("{} ", v);
+        for (i, v) in self.0.lock().unwrap().0.iter().enumerate() {
+            print!("{:02x} ", v);
+            if i != 0 && (i + 1) % 32 == 0 {
+                println!();
+            }
         }
         println!();
         println!("[Alloc size: {} align: {}]", layout.size(), layout.align());
@@ -81,7 +85,6 @@ fn main() {
     println!("struct size: {}", std::mem::size_of::<BuddyAllocator>());
     let s = format!("allocating a string!");
     println!("{}", s);
-    println!("ALL - {}", unsafe { MEMORY_FIELD.0[0] });
 
     #[allow(unused)]
     #[derive(Debug)]
@@ -122,43 +125,4 @@ fn main() {
         &*arc,
     );
     dbg!(b);
-
-    // // fn test<F>(mut c: F)
-    // // where
-    // //     F: FnMut()
-    // // {
-    // //     c();
-    // // }
-    // // let j = 42;
-    // // let ptr: *mut u8 = std::ptr::null_mut();
-    // // let c = || {
-    // // };
-    // // test(c);
-    // // dbg!(ptr);
-
-    // // block(c);
-
-    // // block(|| {
-    // //     dbg!(j);
-    // //     dbg!(ptr);
-
-    // // });
-
-    // // pub fn block<F, T>(f: F) -> ()
-    // // where
-    // //     F: FnOnce() -> T,
-    // //     F: Send + 'static
-    // // {
-    // //     f();
-    // // }
-
-    // let mut a = [12, 34, 35];
-    // a.iter_mut().for_each(|v| {
-    //     *v *= 2;
-    // });
-    // a.iter_mut().for_each(|v| {
-    //     *v *= 2;
-    // });
-
-    // dbg!(a);
 }

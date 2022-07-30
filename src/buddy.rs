@@ -55,6 +55,18 @@ macro_rules! max {
     }}
 }
 
+macro_rules! min {
+    ($x: expr) => ($x);
+    ($x: expr, $($z: expr),+) => {{
+        let y = min!($($z),*);
+        if $x < y {
+            $x
+        } else {
+            y
+        }
+    }}
+}
+
 impl<'a> ProtectedAllocator<'a> {
     const fn new(address: &'a mut [u8]) -> Self {
         assert!(address.len() <= MAX_BUDDY_SIZE); // Max limitation cf. 32b systems
@@ -128,37 +140,84 @@ impl<'a> ProtectedAllocator<'a> {
     const fn attach_static_chunk<const SIZE: usize>(chunk: &'a mut StaticChunk<SIZE>) -> Self {
         Self(&mut chunk.0)
     }
-    const fn set_mark(&mut self, _order: Order) -> Result<NonNull<[u8]>, &'static str> {
-        // Recurse descent into orders
-        // if 0b00 | 0b01 go to the left
-        // if 0b10 go the the right
-        // if 0b00 and order is good, mark it
-        // set 1 bit to parent
-        // if 0b11 then recurse and set 0b11
-        // dbg!(order);
-        Ok(NonNull::from(self.0.get_mut(..).unwrap()))
+    const fn set_mark(&mut self, buddy_size: BuddySize) -> Result<NonNull<[u8]>, &'static str> {
+        let order = Order::try_from((buddy_size, BuddySize(self.0.len() as u32)))?;
+        let order = order.0 as u8;
+        let mut index = 1; // Begin on index 1
+        let mut current_order = 0;
+        // TODO: Problem for order 0
+        while current_order < order {
+            if self.0[index] > order {
+                return Err("Not enough room to swing a cat, a cat, the animal !");
+            } else {
+                let next_offset = index + 2_usize.pow(current_order as u32);
+                index = if self.0[next_offset] <= order {
+                    next_offset
+                } else {
+                    next_offset + 1
+                }
+            }
+            current_order += 1;
+        }
+        self.0[index] |= 0x80;
+        self.0[index] += 1;
+        // TODO: Problem for order 0
+        while index > 1 {
+            if current_order == 0 {
+                panic!("Sa mere");
+            }
+            current_order -= 1;
+            let previous_offset = index - 2_usize.pow(current_order as u32);
+            let parent = if index & 0b1 == 0 {
+                previous_offset
+            } else {
+                previous_offset - 1
+            };
+            let next_offset = previous_offset + 2_usize.pow(current_order as u32);
+            self.0[parent] = min!(self.0[next_offset], self.0[next_offset + 1]);
+            index = parent;
+        }
+        Ok(NonNull::from(
+            self.0
+                .get_mut(index..index + buddy_size.0 as usize)
+                .unwrap(),
+        ))
     }
     fn unset_mark(&mut self, order: Order, ptr: NonNull<u8>) -> Result<(), &'static str> {
-        // check ptr align with order
-        // let shr = 0 + (1 << order.0) + ptr(order);
-        // verify mask 0b10 % ptr offset
-        // set mask 0b00
-        // verify nex buddy if 0b10
-        // if 0b10 get 0 + (1 << (order.0 - 1)) + ptr(offset -> set as 0b01)
-        // Verify if 0b11
-        // if 0b00 get 0 + (1 << (order.0 - 1)) + ptr(offset -> set as 0b00)
-        // Verify if 0b10 or (0b01) ???
-        // END
-        dbg!(order);
-        dbg!(ptr);
-        Ok(())
+        let order = order.0 as u8;
+        // TODO: Very approximative formulae, fix it
+        let mut index: usize = 1
+            + 2_usize.pow(order as u32) as usize
+            + (((ptr.as_ptr() as usize) - (&self.0 as *const _ as usize)) % MIN_BUDDY_SIZE);
+        if self.0[index] & 0x80 != 0x80 {
+            Err("Double Free or corruption")
+        } else {
+            self.0[index] &= 0x7f;
+            self.0[index] -= 1;
+            let mut current_order = order;
+            while index != 0 {
+                let previous_offset = index - 2_usize.pow(current_order as u32);
+                let parent = if index & 0b1 == 0 {
+                    previous_offset
+                } else {
+                    previous_offset - 1
+                };
+                let next_offset = previous_offset + 2_usize.pow(current_order as u32);
+                self.0[parent] = min!(self.0[next_offset], self.0[next_offset + 1]);
+                current_order -= 1;
+                index = parent;
+            }
+            dbg!(order);
+            dbg!(ptr);
+            Ok(())
+        }
     }
 }
 
 // Requested Buddy Size and Order with their TryFrom<_> boilerplates
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 struct BuddySize(u32);
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 struct Order(u32);
 
 impl const TryFrom<(BuddySize, BuddySize)> for Order {
@@ -206,14 +265,12 @@ const fn format_error(e: &'static str) -> AllocError {
 impl<'a> ProtectedAllocator<'a> {
     pub const fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         match BuddySize::try_from(layout) {
-            Ok(buddy_size) => match Order::try_from((buddy_size, BuddySize(self.0.len() as u32))) {
-                Ok(order) => match self.set_mark(order) {
-                    Ok(non_null) => Ok(non_null),
-                    // map_err(|e| ...) doesnot works in constant fn
-                    Err(e) => Err(format_error(e)),
-                },
+            Ok(buddy_size) => match self.set_mark(buddy_size) {
+                Ok(non_null) => Ok(non_null),
+                // map_err(|e| ...) doesnot works in constant fn
                 Err(e) => Err(format_error(e)),
             },
+
             Err(e) => Err(format_error(e)),
         }
     }
