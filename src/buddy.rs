@@ -86,6 +86,11 @@ impl<'a> BuddyAllocator<'a> {
     }
 }
 
+enum Op {
+    Allocate,
+    Deallocate,
+}
+
 impl<'a> ProtectedAllocator<'a> {
     const fn new(address: &'a mut [u8]) -> Self {
         assert!(address.len() <= MAX_BUDDY_SIZE);
@@ -195,7 +200,7 @@ impl<'a> ProtectedAllocator<'a> {
             let alloc_offset =
                 self.0.len() / (1 << current_order) * (index & ((1 << current_order) - 1));
             // ___ Report changes on parents ___
-            self.mark_parents(index, Order(current_order));
+            self.mark_parents(index, Order(current_order), Op::Allocate);
             Ok(NonNull::from(
                 self.0
                     .get_mut(alloc_offset..alloc_offset + buddy_size.0)
@@ -213,16 +218,20 @@ impl<'a> ProtectedAllocator<'a> {
             // ___ Mark as free, like original value ___
             self.0[index] = order.0;
             // ___ Report changes on parents ___
-            self.mark_parents(index, order);
+            self.mark_parents(index, order, Op::Deallocate);
             Ok(())
         }
     }
     #[inline(always)]
-    const fn mark_parents(&mut self, mut index: usize, mut order: Order) {
+    const fn mark_parents(&mut self, mut index: usize, mut order: Order, op: Op) {
         while index > FIRST_INDEX {
             order.0 -= 1;
             let parent = index / 2; // 1/2n --> binary heap
-            let new_indice = min!(self.0[2 * parent], self.0[2 * parent + 1] & 0x7f);
+            let new_indice = match op {
+                Op::Allocate => min!(self.0[2 * parent], self.0[2 * parent + 1] & 0x7f),
+                // TODO: Write routine for deallocate here !
+                Op::Deallocate => min!(self.0[2 * parent], self.0[2 * parent + 1] & 0x7f),
+            };
             if self.0[parent] != new_indice {
                 self.0[parent] = new_indice;
             } else {
