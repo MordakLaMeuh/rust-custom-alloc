@@ -14,3 +14,6 @@ edition = "2021"
 members = []
 
 [features]
+
+[dev-dependencies]
+rand = "0.8.5"

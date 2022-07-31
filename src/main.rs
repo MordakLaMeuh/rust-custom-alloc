@@ -29,6 +29,7 @@
 #![const_eval_limit = "0"]
 // Allow to use addr() fm on std::ptr
 #![feature(strict_provenance)]
+
 // Testing memory
 // RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo run  -Zbuild-std --target x86_64-unknown-linux-gnu
 // RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo test -Zbuild-std --target x86_64-unknown-linux-gnu
@@ -43,39 +44,13 @@ use std::ptr::NonNull;
 
 unsafe impl<'a, const M: usize> Allocator for BuddyAllocator<'a, M> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        println!("[Alloc size: {} align: {}]", layout.size(), layout.align());
-        self.debug();
+        // println!("[Alloc size: {} align: {}]", layout.size(), layout.align());
+        // self.debug();
         let out = self.0.lock().unwrap().alloc(layout);
-        self.debug();
+        // self.debug();
         out
     }
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        println!(
-            "[Free size: {} align: {} ptr: {:?}]",
-            layout.size(),
-            layout.align(),
-            ptr
-        );
-        self.debug();
-        self.0.lock().unwrap().dealloc(ptr, layout);
-        self.debug();
-    }
-}
-
-unsafe impl<'a, const M: usize> Sync for BuddyAllocator<'a, M> {}
-
-unsafe impl<'a, const M: usize> GlobalAlloc for BuddyAllocator<'a, M> {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // println!("[Alloc size: {} align: {}]", layout.size(), layout.align());
-        // self.debug();
-        let out = match self.0.lock().unwrap().alloc(layout) {
-            Ok(non_null) => non_null.as_mut_ptr(),
-            Err(_) => handle_alloc_error(layout),
-        };
-        // self.debug();
-        out
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         // println!(
         //     "[Free size: {} align: {} ptr: {:?}]",
         //     layout.size(),
@@ -83,11 +58,25 @@ unsafe impl<'a, const M: usize> GlobalAlloc for BuddyAllocator<'a, M> {
         //     ptr
         // );
         // self.debug();
+        self.0.lock().unwrap().dealloc(ptr, layout);
+        // self.debug();
+    }
+}
+
+unsafe impl<'a, const M: usize> Sync for BuddyAllocator<'a, M> {}
+
+unsafe impl<'a, const M: usize> GlobalAlloc for BuddyAllocator<'a, M> {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        match self.0.lock().unwrap().alloc(layout) {
+            Ok(non_null) => non_null.as_mut_ptr(),
+            Err(_) => handle_alloc_error(layout),
+        }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         self.0
             .lock()
             .unwrap()
             .dealloc(NonNull::new(ptr).unwrap(), layout);
-        // self.debug();
     }
 }
 
@@ -143,7 +132,7 @@ fn main() {
     #[repr(align(4096))]
     struct MemChunk2([u8; 256]);
     let mut chunk = MemChunk2([0; 256]);
-    let alloc: BuddyAllocator<128> = BuddyAllocator::new(&mut chunk.0);
+    let alloc: BuddyAllocator<64> = BuddyAllocator::new(&mut chunk.0);
 
     let mut v = Vec::new();
     for _i in 0..3 {

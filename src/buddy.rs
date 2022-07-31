@@ -77,6 +77,7 @@ impl<'a, const M: usize> BuddyAllocator<'a, M> {
     }
     // TODO: Need to be private
     /// Used only for debug purposes
+    #[allow(dead_code)]
     pub fn debug(&self) {
         for (i, v) in self.0.lock().unwrap().0.iter().enumerate() {
             print!("{:02x} ", v);
@@ -361,6 +362,60 @@ mod test {
             let g = Box::try_new_in([0xbb_u8; MIN_BUDDY_SIZE * 2], &alloc);
             if let Ok(_v) = &g {
                 panic!("Should Fail");
+            }
+        }
+        // ___ This test is the most important ___
+        const MO: usize = 1024 * 1024;
+        const CHUNK_SIZE: usize = MO * 16;
+        #[repr(align(4096))]
+        struct MemChunk([u8; CHUNK_SIZE]);
+        static mut CHUNK: MemChunk = MemChunk([0; CHUNK_SIZE]);
+        use rand::{thread_rng, Rng};
+        struct Entry<'a> {
+            content: Vec<u8, &'a BuddyAllocator<'a>>,
+            data: u8,
+        }
+        const ALLOC_SIZE: &[usize] = &[64, 128, 256, 512, 1024, 2048, 4096];
+        #[test]
+        fn memory_sodomizer() {
+            for _ in 0..4 {
+                let alloc: BuddyAllocator<64> = BuddyAllocator::new(unsafe { &mut CHUNK.0 });
+                let mut rng = thread_rng();
+                let mut v = Vec::new();
+                for _ in 0..4096 {
+                    match rng.gen() {
+                        false => {
+                            let size = ALLOC_SIZE[rng.gen::<usize>() % ALLOC_SIZE.len()];
+                            let data = rng.gen::<u8>();
+                            let mut content = Vec::new_in(&alloc);
+                            for _ in 0..size {
+                                content.push(data);
+                            }
+                            v.push(Entry { content, data });
+                        }
+                        true => {
+                            if v.len() != 0 {
+                                let entry = v.remove(rng.gen::<usize>() % v.len());
+                                for s in entry.content.iter() {
+                                    if *s != entry.data {
+                                        panic!("Corrupted Memory...");
+                                    }
+                                }
+                                // drop of custom allocated Vector ...
+                            }
+                        }
+                    }
+                }
+                drop(v); // Flush all the alocator content
+                let mut v = Vec::new_in(&alloc);
+                v.reserve(MO * 6); // Take the right buffy order 1 inside the allocator
+                for _ in 0..(MO * 6) {
+                    v.push(42_u8);
+                }
+                let out = v.try_reserve(MO * 6); // The allocator cannot handle that
+                if let Ok(_) = &out {
+                    panic!("This allocation is impossible");
+                }
             }
         }
     }
