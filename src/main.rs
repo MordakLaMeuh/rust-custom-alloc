@@ -37,7 +37,7 @@
 mod buddy;
 mod math;
 
-use buddy::{create_static_chunk, BuddyAllocator, StaticChunk};
+use buddy::{create_static_chunk, BuddyAllocator, StaticBuddyAllocator, StaticChunk};
 
 use std::alloc::{handle_alloc_error, AllocError, Allocator, GlobalAlloc, Layout};
 use std::ptr::NonNull;
@@ -63,9 +63,7 @@ unsafe impl<'a, const M: usize> Allocator for BuddyAllocator<'a, M> {
     }
 }
 
-unsafe impl<'a, const M: usize> Sync for BuddyAllocator<'a, M> {}
-
-unsafe impl<'a, const M: usize> GlobalAlloc for BuddyAllocator<'a, M> {
+unsafe impl<'a, const M: usize> GlobalAlloc for StaticBuddyAllocator<'a, M> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         match self.0.lock().unwrap().alloc(layout) {
             Ok(non_null) => non_null.as_mut_ptr(),
@@ -86,8 +84,8 @@ const MIN_CELL_LEN: usize = 64;
 static mut MEMORY_FIELD: StaticChunk<MEMORY_FIELD_SIZE, { MIN_CELL_LEN * 2 }> =
     create_static_chunk();
 #[global_allocator]
-static ALLOCATOR: BuddyAllocator<{ MIN_CELL_LEN * 2 }> =
-    BuddyAllocator::attach_static_chunk(unsafe { &mut MEMORY_FIELD });
+static ALLOCATOR: StaticBuddyAllocator<{ MIN_CELL_LEN * 2 }> =
+    StaticBuddyAllocator::attach_static_chunk(unsafe { &mut MEMORY_FIELD });
 
 fn main() {
     println!("struct size: {}", std::mem::size_of::<BuddyAllocator>());
