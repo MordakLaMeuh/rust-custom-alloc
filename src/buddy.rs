@@ -392,87 +392,33 @@ mod test {
             data: u8,
         }
         const ALLOC_SIZE: &[usize] = &[64, 128, 256, 512, 1024, 2048, 4096];
-        #[test]
-        fn memory_sodomizer() {
-            for _ in 0..4 {
-                let alloc: BuddyAllocator<64> = BuddyAllocator::new(unsafe { &mut CHUNK.0 });
-                let mut rng = thread_rng();
-                let mut v = Vec::new();
-                for _ in 0..NB_TESTS {
-                    match rng.gen() {
-                        true if v.len() > 200 => {
-                            let entry: Entry = v.remove(rng.gen::<usize>() % v.len());
-                            for s in entry.content.iter() {
-                                if *s != entry.data {
-                                    panic!("Corrupted Memory...");
-                                }
+        fn repeat_test(alloc: BuddyAllocator) {
+            let mut rng = thread_rng();
+            let mut v = Vec::new();
+            for _ in 0..NB_TESTS {
+                match rng.gen() {
+                    true if v.len() > 200 => {
+                        let entry: Entry = v.remove(rng.gen::<usize>() % v.len());
+                        for s in entry.content.iter() {
+                            if *s != entry.data {
+                                panic!("Corrupted Memory...");
                             }
-                        }
-                        _ => {
-                            let size = ALLOC_SIZE[rng.gen::<usize>() % ALLOC_SIZE.len()];
-                            let data = rng.gen::<u8>();
-                            let mut content = Vec::new_in(alloc.clone());
-                            for _ in 0..size {
-                                content.push(data);
-                            }
-                            v.push(Entry { content, data });
                         }
                     }
-                }
-                drop(v); // Flush all the alocator content
-                let mut v = Vec::new_in(alloc.clone());
-                v.reserve(MO * 6); // Take the right buffy order 1 inside the allocator
-                for _ in 0..(MO * 6) {
-                    v.push(42_u8);
-                }
-                let out = v.try_reserve(MO * 6); // The allocator cannot handle that
-                if let Ok(_) = &out {
-                    panic!("This allocation is impossible");
+                    _ => {
+                        let size = ALLOC_SIZE[rng.gen::<usize>() % ALLOC_SIZE.len()];
+                        let data = rng.gen::<u8>();
+                        let mut content = Vec::new_in(alloc.clone());
+                        for _ in 0..size {
+                            content.push(data);
+                        }
+                        v.push(Entry { content, data });
+                    }
                 }
             }
+            drop(v); // Flush all the alocator content
         }
-        #[test]
-        fn memory_sodomizer_multithreaded() {
-            let chunk = unsafe { libc::memalign(4096, CHUNK_SIZE) as *mut u8 };
-            let slice = unsafe { std::slice::from_raw_parts_mut(chunk, CHUNK_SIZE) };
-            // thread::spawn can only static reference, force the compiler by transmute to
-            // cast reference as static. Ensure manually that the object will continue to live.
-            let static_slice =
-                unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(slice) };
-            let alloc: BuddyAllocator<64> = BuddyAllocator::new(static_slice);
-            let mut thread_list = Vec::new();
-            for _ in 0..4 {
-                let clone = alloc.clone();
-                thread_list.push(std::thread::spawn(move || {
-                    let mut rng = thread_rng();
-                    let mut v = Vec::new();
-                    for _ in 0..NB_TESTS {
-                        match rng.gen() {
-                            true if v.len() > 200 => {
-                                let entry: Entry = v.remove(rng.gen::<usize>() % v.len());
-                                for s in entry.content.iter() {
-                                    if *s != entry.data {
-                                        panic!("Corrupted Memory...");
-                                    }
-                                }
-                            }
-                            _ => {
-                                let size = ALLOC_SIZE[rng.gen::<usize>() % ALLOC_SIZE.len()];
-                                let data = rng.gen::<u8>();
-                                let mut content = Vec::new_in(clone.clone());
-                                for _ in 0..size {
-                                    content.push(data);
-                                }
-                                v.push(Entry { content, data });
-                            }
-                        }
-                    }
-                    drop(v); // Flush all the alocator content
-                }));
-            }
-            for thread in thread_list.into_iter() {
-                drop(thread.join());
-            }
+        fn final_test(alloc: BuddyAllocator) {
             let mut v = Vec::new_in(alloc.clone());
             v.try_reserve(MO * 6).unwrap(); // Take the right buffy order 1 inside the allocator
             for _ in 0..(42) {
@@ -482,7 +428,37 @@ mod test {
             if let Ok(_) = &out {
                 panic!("This allocation is impossible");
             }
-            drop(v); // IMPORTANT: The last allocated object must be droped BEFORE freeing memory
+        }
+        #[test]
+        fn memory_sodomizer() {
+            for _ in 0..4 {
+                let alloc: BuddyAllocator<64> = BuddyAllocator::new(unsafe { &mut CHUNK.0 });
+                repeat_test(alloc.clone());
+                final_test(alloc.clone());
+            }
+        }
+        #[test]
+        fn memory_sodomizer_multithreaded() {
+            let chunk = unsafe { libc::memalign(4096, CHUNK_SIZE) as *mut u8 };
+            let slice = unsafe { std::slice::from_raw_parts_mut(chunk, CHUNK_SIZE) };
+            // thread::spawn can only take static reference so force the compiler by
+            // transmuting to cast reference as static. And ensure you manually that
+            // the object will continue to live.
+            let static_slice =
+                unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(slice) };
+            let alloc: BuddyAllocator<64> = BuddyAllocator::new(static_slice);
+            let mut thread_list = Vec::new();
+            for _ in 0..4 {
+                let clone = alloc.clone();
+                thread_list.push(std::thread::spawn(move || {
+                    repeat_test(clone.clone());
+                }));
+            }
+            for thread in thread_list.into_iter() {
+                drop(thread.join());
+            }
+            final_test(alloc.clone());
+            // drop(v); // IMPORTANT: The last allocated object must be droped BEFORE freeing memory
             unsafe {
                 libc::free(chunk as *mut _);
             }
