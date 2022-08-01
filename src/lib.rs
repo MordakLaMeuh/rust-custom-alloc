@@ -71,6 +71,15 @@ unsafe impl<'a, const M: usize> Allocator for BuddyAllocator<'a, M> {
     }
 }
 
+unsafe impl<'a, const M: usize> Allocator for StaticBuddyAllocator<'a, M> {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        self.0.lock().unwrap().alloc(layout)
+    }
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        self.0.lock().unwrap().dealloc(ptr, layout);
+    }
+}
+
 unsafe impl<'a, const M: usize> GlobalAlloc for StaticBuddyAllocator<'a, M> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         match self.0.lock().unwrap().alloc(layout) {
@@ -370,7 +379,8 @@ const fn format_error(e: &'static str) -> AllocError {
 #[cfg(test)]
 mod test {
     use super::random::{srand_init, Rand};
-    use super::Layout;
+    use super::{create_static_chunk, StaticBuddyAllocator, StaticChunk};
+    use super::{Allocator, Layout};
     use super::{BuddyAllocator, BuddySize, Order, ProtectedAllocator};
     use super::{MAX_BUDDY_SIZE, MAX_SUPPORTED_ALIGN, MIN_BUDDY_SIZE};
 
@@ -384,8 +394,10 @@ mod test {
     };
 
     mod allocator {
+        use super::Allocator;
         use super::BuddyAllocator;
         use super::MIN_BUDDY_SIZE;
+        use super::{create_static_chunk, StaticBuddyAllocator, StaticChunk};
         use super::{srand_init, Rand};
         #[test]
         fn fill_and_empty() {
@@ -445,18 +457,20 @@ mod test {
         #[repr(align(4096))]
         struct MemChunk([u8; CHUNK_SIZE]);
         static mut CHUNK: MemChunk = MemChunk([0; CHUNK_SIZE]);
-        // TODO: Take custom rand.rs instead: dependencies...
-        struct Entry<'a> {
-            content: Vec<u8, BuddyAllocator<'a>>,
+        struct Entry<'a, T: Allocator> {
+            content: Vec<u8, &'a T>,
             data: u8,
         }
         const ALLOC_SIZE: &[usize] = &[64, 128, 256, 512, 1024, 2048, 4096];
-        fn repeat_test(alloc: BuddyAllocator) {
+        fn repeat_test<T>(alloc: &T)
+        where
+            T: Allocator,
+        {
             let mut v = Vec::new();
             for _ in 0..NB_TESTS {
                 match bool::srand(true) {
                     true if v.len() > 200 => {
-                        let entry: Entry = v.remove(usize::srand(v.len() - 1));
+                        let entry: Entry<T> = v.remove(usize::srand(v.len() - 1));
                         for s in entry.content.iter() {
                             if *s != entry.data {
                                 panic!("Corrupted Memory...");
@@ -466,7 +480,7 @@ mod test {
                     _ => {
                         let size = ALLOC_SIZE[usize::srand(ALLOC_SIZE.len() - 1)];
                         let data = u8::srand(u8::MAX);
-                        let mut content = Vec::new_in(alloc.clone());
+                        let mut content = Vec::new_in(alloc);
                         for _ in 0..size {
                             content.push(data);
                         }
@@ -476,8 +490,11 @@ mod test {
             }
             drop(v); // Flush all the alocator content
         }
-        fn final_test(alloc: BuddyAllocator) {
-            let mut v = Vec::new_in(alloc.clone());
+        fn final_test<T>(alloc: &T)
+        where
+            T: Allocator,
+        {
+            let mut v = Vec::new_in(alloc);
             v.try_reserve(MO * 6).unwrap(); // Take the right buffy order 1 inside the allocator
             for _ in 0..(MO * 6) {
                 v.push(42_u8);
@@ -492,8 +509,8 @@ mod test {
             srand_init(42);
             for _ in 0..4 {
                 let alloc: BuddyAllocator<64> = BuddyAllocator::new(unsafe { &mut CHUNK.0 });
-                repeat_test(alloc.clone());
-                final_test(alloc.clone());
+                repeat_test(&alloc);
+                final_test(&alloc);
             }
         }
         #[test]
@@ -512,17 +529,34 @@ mod test {
             for _ in 0..4 {
                 let clone = alloc.clone();
                 thread_list.push(std::thread::spawn(move || {
-                    repeat_test(clone.clone());
+                    repeat_test(&clone);
                 }));
             }
             for thread in thread_list.into_iter() {
                 drop(thread.join());
             }
-            final_test(alloc.clone());
+            final_test(&alloc);
             // drop(v); // IMPORTANT: The last allocated object must be droped BEFORE freeing memory
             unsafe {
                 libc::free(chunk as *mut _);
             }
+        }
+        static mut MEMORY_FIELD: StaticChunk<CHUNK_SIZE, 64> = create_static_chunk();
+        static STATIC_ALLOC: StaticBuddyAllocator<64> =
+            StaticBuddyAllocator::attach_static_chunk(unsafe { &mut MEMORY_FIELD });
+        #[test]
+        fn memory_sodomizer_multithreaded_with_static() {
+            srand_init(42);
+            let mut thread_list = Vec::new();
+            for _ in 0..4 {
+                thread_list.push(std::thread::spawn(move || {
+                    repeat_test(&STATIC_ALLOC);
+                }));
+            }
+            for thread in thread_list.into_iter() {
+                drop(thread.join());
+            }
+            final_test(&STATIC_ALLOC);
         }
     }
     mod buddy_convert {
