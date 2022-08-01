@@ -39,10 +39,13 @@ mod math;
 use math::{round_up_2, trailing_zero_right};
 mod macros;
 
+// TODO: Find a solution with no_std
 use std::alloc::{handle_alloc_error, AllocError, Allocator, GlobalAlloc, Layout};
 use std::mem::forget;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
+// TODO: Create good documentations
+// TODO: Draw nodes to explain the Buddy research update tree
 
 unsafe impl<'a, const M: usize> Allocator for BuddyAllocator<'a, M> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
@@ -86,14 +89,12 @@ const MAX_SUPPORTED_ALIGN: usize = 4096;
 
 const FIRST_INDEX: usize = 1;
 
-// TODO: All this file exept macro must be copies into lib.rs
 /// Buddy Allocator
 #[repr(C, align(16))]
 pub struct StaticBuddyAllocator<'a, const M: usize = MIN_BUDDY_SIZE>(
     Mutex<ProtectedAllocator<'a, M>>,
 );
 
-// TODO: All this file exept macro must be copies into lib.rs
 /// Buddy Allocator
 #[derive(Clone)]
 #[repr(C, align(16))]
@@ -439,6 +440,7 @@ mod test {
         #[repr(align(4096))]
         struct MemChunk([u8; CHUNK_SIZE]);
         static mut CHUNK: MemChunk = MemChunk([0; CHUNK_SIZE]);
+        // TODO: Take custom rand.rs instead: dependencies...
         use rand::{thread_rng, Rng};
         struct Entry<'a> {
             content: Vec<u8, BuddyAllocator<'a>>,
@@ -492,6 +494,7 @@ mod test {
         }
         #[test]
         fn memory_sodomizer_multithreaded() {
+            // TODO: Not using libc crate for tests... need install gcc multilib...
             let chunk = unsafe { libc::memalign(4096, CHUNK_SIZE) as *mut u8 };
             let slice = unsafe { std::slice::from_raw_parts_mut(chunk, CHUNK_SIZE) };
             // thread::spawn can only take static reference so force the compiler by
