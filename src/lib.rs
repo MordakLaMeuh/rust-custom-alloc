@@ -42,6 +42,7 @@ mod macros;
 #[cfg(test)]
 mod random;
 
+// TODO: Reserve blocks
 // TODO: Find a solution with no_std
 use core::mem::forget;
 use core::ptr::NonNull;
