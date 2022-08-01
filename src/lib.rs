@@ -42,6 +42,7 @@ mod macros;
 #[cfg(test)]
 mod random;
 
+// TODO: Allow more memory space to be addressable
 // TODO: Reserve blocks
 // TODO: Find a solution with no_std
 use core::mem::forget;
