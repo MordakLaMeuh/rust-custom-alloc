@@ -27,8 +27,6 @@ pub fn lfsr16_set_seed(seed: u16) {
                 for j in 0..32 {
                     let bits: u16 = (lfsr >> 0) ^ (lfsr >> 2) ^ (lfsr >> 3) ^ (lfsr >> 5);
                     lfsr = lfsr >> 1;
-                    // lfsr.set_bit(15, bits.get_bit(0));
-                    // (*elem).set_bit(j, bits.get_bit(0));
                     let bit = bits & 0b1;
                     lfsr |= bit << 15;
                     *elem |= ((bit as u32) << j) as u32;

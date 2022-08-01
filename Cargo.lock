@@ -3,5 +3,5 @@
 version = 3
 
 [[package]]
-name = "alloc_test"
+name = "buddy-allocator-nightly"
 version = "0.1.0"

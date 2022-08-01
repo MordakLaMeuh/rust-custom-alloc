@@ -1,5 +1,6 @@
 //! Custom Allocator based on buddy System
 #![deny(missing_docs)]
+#![cfg_attr(all(feature = "no-std", not(test)), no_std)]
 // Allow use of custom allocator
 #![feature(allocator_api)]
 // Get a pointer from the beginning of the slice
@@ -37,6 +38,7 @@
 
 mod math;
 use math::{round_up_2, trailing_zero_right};
+#[macro_use]
 mod macros;
 
 #[cfg(test)]
@@ -135,6 +137,7 @@ impl<'a, const M: usize> BuddyAllocator<'a, M> {
         Self(Arc::new(Mutex::new(ProtectedAllocator::new(address))))
     }
     /// Used only for debug purposes
+    #[cfg(not(feature = "no-std"))]
     #[allow(dead_code)]
     fn debug(&self) {
         for (i, v) in self.0.lock().unwrap().0.iter().enumerate() {
