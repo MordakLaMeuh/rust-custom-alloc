@@ -30,9 +30,12 @@
 // Allow to use addr() fm on std::ptr
 #![feature(strict_provenance)]
 
-// Testing memory
+// ___ Testing on 64bits system Linux (with address sanitizer) ___
 // RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo run  -Zbuild-std --target x86_64-unknown-linux-gnu
 // RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo test -Zbuild-std --target x86_64-unknown-linux-gnu
+// ___ Testing on 32bits system Linux (address sanitizer is unaivalable for this arch) ___
+// RUST_BACKTRACE=1 cargo run --target i686-unknown-linux-gnu
+// RUST_BACKTRACE=1 cargo test --target i686-unknown-linux-gnu
 
 mod buddy;
 mod math;
@@ -99,11 +102,11 @@ fn main() {
     #[allow(unused)]
     #[derive(Debug)]
     struct Banane {
-        i: u64,
-        j: u64,
-        k: u64,
-        l: u64,
-        arr: [u64; 8],
+        i: usize,
+        j: usize,
+        k: usize,
+        l: usize,
+        arr: [usize; 8],
     }
     println!("struct size: {}", std::mem::size_of::<Banane>());
     #[repr(align(4096))]
@@ -115,11 +118,11 @@ fn main() {
     dbg!(std::sync::Arc::as_ptr(&arc) as *const _);
     let b = Box::new_in(
         Banane {
-            i: 0xAAAAAAAAAAAAAAAA,
-            j: 0xBBBBBBBBBBBBBBBB,
-            k: 0xCCCCCCCCCCCCCCCC,
-            l: 0xDDDDDDDDDDDDDDDD,
-            arr: [0xFFFFFFFFFFFFFFFF; 8],
+            i: 0xAAAAAAAA,
+            j: 0xBBBBBBBB,
+            k: 0xCCCCCCCC,
+            l: 0xDDDDDDDD,
+            arr: [usize::MAX; 8],
         },
         &*arc,
     );
