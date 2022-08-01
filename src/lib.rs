@@ -39,10 +39,13 @@ mod math;
 use math::{round_up_2, trailing_zero_right};
 mod macros;
 
+#[cfg(test)]
+mod random;
+
 // TODO: Find a solution with no_std
+use core::mem::forget;
+use core::ptr::NonNull;
 use std::alloc::{handle_alloc_error, AllocError, Allocator, GlobalAlloc, Layout};
-use std::mem::forget;
-use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 // TODO: Create good documentations
 // TODO: Draw nodes to explain the Buddy research update tree
@@ -366,6 +369,7 @@ const fn format_error(e: &'static str) -> AllocError {
 
 #[cfg(test)]
 mod test {
+    use super::random::{srand_init, Rand};
     use super::Layout;
     use super::{BuddyAllocator, BuddySize, Order, ProtectedAllocator};
     use super::{MAX_BUDDY_SIZE, MAX_SUPPORTED_ALIGN, MIN_BUDDY_SIZE};
@@ -382,6 +386,7 @@ mod test {
     mod allocator {
         use super::BuddyAllocator;
         use super::MIN_BUDDY_SIZE;
+        use super::{srand_init, Rand};
         #[test]
         fn fill_and_empty() {
             #[repr(align(4096))]
@@ -441,19 +446,17 @@ mod test {
         struct MemChunk([u8; CHUNK_SIZE]);
         static mut CHUNK: MemChunk = MemChunk([0; CHUNK_SIZE]);
         // TODO: Take custom rand.rs instead: dependencies...
-        use rand::{thread_rng, Rng};
         struct Entry<'a> {
             content: Vec<u8, BuddyAllocator<'a>>,
             data: u8,
         }
         const ALLOC_SIZE: &[usize] = &[64, 128, 256, 512, 1024, 2048, 4096];
         fn repeat_test(alloc: BuddyAllocator) {
-            let mut rng = thread_rng();
             let mut v = Vec::new();
             for _ in 0..NB_TESTS {
-                match rng.gen() {
+                match bool::srand(true) {
                     true if v.len() > 200 => {
-                        let entry: Entry = v.remove(rng.gen::<usize>() % v.len());
+                        let entry: Entry = v.remove(usize::srand(v.len() - 1));
                         for s in entry.content.iter() {
                             if *s != entry.data {
                                 panic!("Corrupted Memory...");
@@ -461,8 +464,8 @@ mod test {
                         }
                     }
                     _ => {
-                        let size = ALLOC_SIZE[rng.gen::<usize>() % ALLOC_SIZE.len()];
-                        let data = rng.gen::<u8>();
+                        let size = ALLOC_SIZE[usize::srand(ALLOC_SIZE.len() - 1)];
+                        let data = u8::srand(u8::MAX);
                         let mut content = Vec::new_in(alloc.clone());
                         for _ in 0..size {
                             content.push(data);
@@ -486,6 +489,7 @@ mod test {
         }
         #[test]
         fn memory_sodomizer() {
+            srand_init(42);
             for _ in 0..4 {
                 let alloc: BuddyAllocator<64> = BuddyAllocator::new(unsafe { &mut CHUNK.0 });
                 repeat_test(alloc.clone());
@@ -494,6 +498,7 @@ mod test {
         }
         #[test]
         fn memory_sodomizer_multithreaded() {
+            srand_init(42);
             // TODO: Not using libc crate for tests... need install gcc multilib...
             let chunk = unsafe { libc::memalign(4096, CHUNK_SIZE) as *mut u8 };
             let slice = unsafe { std::slice::from_raw_parts_mut(chunk, CHUNK_SIZE) };
