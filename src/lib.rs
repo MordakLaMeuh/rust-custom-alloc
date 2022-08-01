@@ -48,12 +48,24 @@ mod random;
 // TODO: Allow more memory space to be addressable
 // TODO: Reserve blocks
 // TODO: Find a solution with no_std
+use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
 use core::mem::forget;
+#[cfg(all(feature = "no-std", not(test)))]
+use core::ptr::null_mut;
 use core::ptr::NonNull;
-use std::alloc::{handle_alloc_error, AllocError, Allocator, GlobalAlloc, Layout};
+#[cfg(not(feature = "no-std"))]
+use std::alloc::handle_alloc_error;
+#[cfg(not(feature = "no-std"))]
 use std::sync::{Arc, Mutex};
 // TODO: Create good documentations
 // TODO: Draw nodes to explain the Buddy research update tree
+
+/// #![cfg_attr(all(feature = "no-std", not(test)), feature(alloc_error_handler))]
+/// #[cfg(all(feature = "no-std", not(test)))]
+/// #[alloc_error_handler]
+/// fn out_of_memory(_: core::alloc::Layout) -> ! {
+///     panic!("Sa mere");
+/// }
 
 unsafe impl<'a, const M: usize> Allocator for BuddyAllocator<'a, M> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
@@ -89,7 +101,12 @@ unsafe impl<'a, const M: usize> GlobalAlloc for StaticBuddyAllocator<'a, M> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         match self.0.lock().unwrap().alloc(layout) {
             Ok(non_null) => non_null.as_mut_ptr(),
-            Err(_) => handle_alloc_error(layout),
+            Err(_) => {
+                #[cfg(not(feature = "no-std"))]
+                handle_alloc_error(layout);
+                #[cfg(feature = "no-std")]
+                null_mut()
+            }
         }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
