@@ -396,9 +396,9 @@ mod test {
     mod allocator {
         use super::Allocator;
         use super::BuddyAllocator;
-        use super::MIN_BUDDY_SIZE;
         use super::{create_static_chunk, StaticBuddyAllocator, StaticChunk};
         use super::{srand_init, Rand};
+        use super::{MAX_SUPPORTED_ALIGN, MIN_BUDDY_SIZE};
         #[test]
         fn fill_and_empty() {
             #[repr(align(4096))]
@@ -450,13 +450,12 @@ mod test {
                 panic!("Should Fail");
             }
         }
-        // ___ This test is the most important ___
+        // ___ These tests are the most important ___
         const NB_TESTS: usize = 4096;
         const MO: usize = 1024 * 1024;
         const CHUNK_SIZE: usize = MO * 16;
         #[repr(align(4096))]
         struct MemChunk([u8; CHUNK_SIZE]);
-        static mut CHUNK: MemChunk = MemChunk([0; CHUNK_SIZE]);
         struct Entry<'a, T: Allocator> {
             content: Vec<u8, &'a T>,
             data: u8,
@@ -504,9 +503,10 @@ mod test {
                 panic!("This allocation is impossible");
             }
         }
+        static mut CHUNK: MemChunk = MemChunk([0; CHUNK_SIZE]);
         #[test]
         fn memory_sodomizer() {
-            srand_init(42);
+            srand_init(10);
             for _ in 0..4 {
                 let alloc: BuddyAllocator<64> = BuddyAllocator::new(unsafe { &mut CHUNK.0 });
                 repeat_test(&alloc);
@@ -515,16 +515,16 @@ mod test {
         }
         #[test]
         fn memory_sodomizer_multithreaded() {
-            srand_init(42);
-            // TODO: Not using libc crate for tests... need install gcc multilib...
-            let chunk = unsafe { libc::memalign(4096, CHUNK_SIZE) as *mut u8 };
-            let slice = unsafe { std::slice::from_raw_parts_mut(chunk, CHUNK_SIZE) };
+            srand_init(21);
+            let mut memory = vec![0x21_u8; CHUNK_SIZE + MAX_SUPPORTED_ALIGN];
+            let (_prefix, aligned_memory, _suffix) = unsafe { memory.align_to_mut::<MemChunk>() };
             // thread::spawn can only take static reference so force the compiler by
             // transmuting to cast reference as static. And ensure you manually that
             // the object will continue to live.
-            let static_slice =
-                unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(slice) };
-            let alloc: BuddyAllocator<64> = BuddyAllocator::new(static_slice);
+            let refer = &mut aligned_memory[0].0;
+            let refer_static =
+                unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(refer) };
+            let alloc: BuddyAllocator<64> = BuddyAllocator::new(refer_static);
             let mut thread_list = Vec::new();
             for _ in 0..4 {
                 let clone = alloc.clone();
@@ -536,10 +536,6 @@ mod test {
                 drop(thread.join());
             }
             final_test(&alloc);
-            // drop(v); // IMPORTANT: The last allocated object must be droped BEFORE freeing memory
-            unsafe {
-                libc::free(chunk as *mut _);
-            }
         }
         static mut MEMORY_FIELD: StaticChunk<CHUNK_SIZE, 64> = create_static_chunk();
         static STATIC_ALLOC: StaticBuddyAllocator<64> =
