@@ -1,9 +1,84 @@
-use super::math::{round_up_2, trailing_zero_right};
+//! Custom Allocator based on buddy System
+#![deny(missing_docs)]
+// Allow use of custom allocator
+#![feature(allocator_api)]
+// Get a pointer from the beginning of the slice
+#![feature(slice_ptr_get)]
+// Const fn align_offset of std::ptr
+#![feature(const_align_offset)]
+// Use of mutable reference into const fn
+#![feature(const_mut_refs)]
+// Allow to use Index and IndexMut on slices in const fn
+#![feature(const_slice_index)]
+// Use of Option<T> in const fn
+#![feature(const_option)]
+// Used for impl TryFrom boilerplates in const fn
+#![feature(const_convert)]
+// Allow to writes boilerplates with const before impl keyword
+#![feature(const_trait_impl)]
+// Allow use of Try operator ? on Result in const fn
+#![feature(const_try)]
+// allow to use From and Into on Integer an float types in const Fn
+#![feature(const_num_from_num)]
+// NOTE: Unwrapping Result<T, E> on const Fn is impossible for the moment
+// We use ok() to drop the Result and then just unwrapping the Option<T>
+// The associated feature for that is 'const_result_drop'
+#![feature(const_result_drop)]
+// Allow to use const_looping see: https://github.com/rust-lang/rust/issues/93481
+#![feature(const_eval_limit)]
+#![const_eval_limit = "0"]
+// Allow to use addr() fm on std::ptr
+#![feature(strict_provenance)]
 
-use std::alloc::{AllocError, Layout};
+// ___ Testing on 64bits system Linux (with address sanitizer) ___
+// RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo test -Zbuild-std --target x86_64-unknown-linux-gnu
+// ___ Testing on 32bits system Linux (address sanitizer is unaivalable for this arch) ___
+// RUST_BACKTRACE=1 cargo test --target i686-unknown-linux-gnu
+
+mod math;
+use math::{round_up_2, trailing_zero_right};
+mod macros;
+
+use std::alloc::{handle_alloc_error, AllocError, Allocator, GlobalAlloc, Layout};
 use std::mem::forget;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
+
+unsafe impl<'a, const M: usize> Allocator for BuddyAllocator<'a, M> {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        // println!("[Alloc size: {} align: {}]", layout.size(), layout.align());
+        // self.debug();
+        let out = self.0.lock().unwrap().alloc(layout);
+        // self.debug();
+        out
+    }
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        // println!(
+        //     "[Free size: {} align: {} ptr: {:?}]",
+        //     layout.size(),
+        //     layout.align(),
+        //     ptr
+        // );
+        // self.debug();
+        self.0.lock().unwrap().dealloc(ptr, layout);
+        // self.debug();
+    }
+}
+
+unsafe impl<'a, const M: usize> GlobalAlloc for StaticBuddyAllocator<'a, M> {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        match self.0.lock().unwrap().alloc(layout) {
+            Ok(non_null) => non_null.as_mut_ptr(),
+            Err(_) => handle_alloc_error(layout),
+        }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        self.0
+            .lock()
+            .unwrap()
+            .dealloc(NonNull::new(ptr).unwrap(), layout);
+    }
+}
 
 const MIN_BUDDY_SIZE: usize = 64;
 const MAX_BUDDY_SIZE: usize = 0x2000_0000;
@@ -15,7 +90,7 @@ const FIRST_INDEX: usize = 1;
 /// Buddy Allocator
 #[repr(C, align(16))]
 pub struct StaticBuddyAllocator<'a, const M: usize = MIN_BUDDY_SIZE>(
-    pub Mutex<ProtectedAllocator<'a, M>>,
+    Mutex<ProtectedAllocator<'a, M>>,
 );
 
 // TODO: All this file exept macro must be copies into lib.rs
@@ -23,11 +98,10 @@ pub struct StaticBuddyAllocator<'a, const M: usize = MIN_BUDDY_SIZE>(
 #[derive(Clone)]
 #[repr(C, align(16))]
 pub struct BuddyAllocator<'a, const M: usize = MIN_BUDDY_SIZE>(
-    pub Arc<Mutex<ProtectedAllocator<'a, M>>>,
+    Arc<Mutex<ProtectedAllocator<'a, M>>>,
 );
 
-// TODO: Must be set as private
-pub struct ProtectedAllocator<'a, const M: usize>(pub &'a mut [u8]);
+struct ProtectedAllocator<'a, const M: usize>(pub &'a mut [u8]);
 
 // ___ Requested Buddy Size and Order with their TryFrom<_> boilerplates ___
 #[derive(Debug, Copy, Clone)]
@@ -39,40 +113,14 @@ struct Order(u8);
 #[repr(align(4096))]
 pub struct StaticChunk<const SIZE: usize, const M: usize>(pub [u8; SIZE]);
 
-// TODO: Send macros into a separated file with macro export
-macro_rules! max {
-    ($x: expr) => ($x);
-    ($x: expr, $($z: expr),+) => {{
-        let y = max!($($z),*);
-        if $x > y {
-            $x
-        } else {
-            y
-        }
-    }}
-}
-
-macro_rules! min {
-    ($x: expr) => ($x);
-    ($x: expr, $($z: expr),+) => {{
-        let y = min!($($z),*);
-        if $x < y {
-            $x
-        } else {
-            y
-        }
-    }}
-}
-
 impl<'a, const M: usize> BuddyAllocator<'a, M> {
     /// Create a new Buddy Allocator
     pub fn new(address: &'a mut [u8]) -> Self {
         Self(Arc::new(Mutex::new(ProtectedAllocator::new(address))))
     }
-    // TODO: Need to be private
     /// Used only for debug purposes
     #[allow(dead_code)]
-    pub fn debug(&self) {
+    fn debug(&self) {
         for (i, v) in self.0.lock().unwrap().0.iter().enumerate() {
             print!("{:02x} ", v);
             if i != 0 && (i + 1) % 32 == 0 {
@@ -169,7 +217,7 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
             .expect("Woot ? Already insuffisant memory ?!? That Buddy Allocator sucks !");
         this
     }
-    pub const fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+    const fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         match BuddySize::try_from(layout) {
             Ok(buddy_size) => match self.set_mark(buddy_size) {
                 Ok(non_null) => Ok(non_null),
@@ -179,7 +227,7 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
             Err(e) => Err(format_error(e)),
         }
     }
-    pub fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) {
+    fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) {
         match BuddySize::try_from(layout) {
             Ok(buddy_size) => match Order::try_from((buddy_size, BuddySize::<M>(self.0.len()))) {
                 Ok(order) => self.unset_mark(order, ptr).unwrap(),
