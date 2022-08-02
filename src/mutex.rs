@@ -48,6 +48,7 @@ mod std {
     use std::sync::Mutex;
 
     impl<T> const GenericMutex<T> for Mutex<T> {
+        #[inline(always)]
         fn create(v: T) -> Self {
             Mutex::new(v)
         }
@@ -56,6 +57,7 @@ mod std {
     impl<T> RwMutex<T> for Mutex<T> {
         type Error = ();
 
+        #[inline(always)]
         fn lock_mut<R>(&self, f: impl FnOnce(&mut T) -> R) -> Result<R, Self::Error> {
             let mut v = self.lock().unwrap();
             Ok(f(&mut v))

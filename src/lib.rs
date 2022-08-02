@@ -52,6 +52,7 @@ mod random;
 // TODO: Reserve blocks
 // TODO: Create good documentations
 use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
+use core::marker::PhantomData;
 use core::ops::Deref;
 #[cfg(all(feature = "no-std", not(test)))]
 use core::ptr::null_mut;
@@ -67,9 +68,81 @@ use std::{alloc::handle_alloc_error, sync::Mutex};
 //      panic!("Sa mere");
 // }
 
-unsafe impl<'a, T, const M: usize> Allocator for BuddyAllocator<'a, T, M>
+const MIN_BUDDY_SIZE: usize = 64;
+const MAX_BUDDY_SIZE: usize = 0x2000_0000;
+const MAX_SUPPORTED_ALIGN: usize = 4096;
+
+const FIRST_INDEX: usize = 1;
+
+/// Simple creation of a new Mutex
+pub trait GenericMutex2<'a>: Sized {
+    /// Create a new Mutex
+    fn create(v: &'a mut [u8]) -> Self;
+}
+
+/// DOC
+pub trait RwMutex2<'a>: GenericMutex2<'a> {
+    /// Locking error
+    type Error: core::fmt::Debug;
+
+    /// Lock the mutex for the duration of a closure
+    ///
+    /// `lock_mut` will call a closure with a mutable reference to the unlocked
+    /// mutex's value.
+    fn lock_mut<R>(&self, f: impl FnOnce(&mut [u8]) -> R) -> Result<R, Self::Error>;
+}
+
+impl<'a> const GenericMutex2<'a> for Mutex<&'a mut [u8]> {
+    #[inline(always)]
+    fn create(v: &'a mut [u8]) -> Self {
+        Mutex::new(v)
+    }
+}
+
+impl<'a> RwMutex2<'a> for Mutex<&'a mut [u8]> {
+    type Error = ();
+
+    #[inline(always)]
+    fn lock_mut<R>(&self, f: impl FnOnce(&mut [u8]) -> R) -> Result<R, Self::Error> {
+        let mut v = self.lock().unwrap();
+        Ok(f(&mut v))
+    }
+}
+
+/// Buddy Allocator
+#[repr(C, align(16))]
+pub struct BuddyAllocator<
+    'a,
+    T: Deref<Target = X> + Send + Sync + Clone,
+    X: RwMutex2<'a> + Send + Sync,
+    const M: usize = MIN_BUDDY_SIZE,
+> {
+    data: T,
+    phantom: PhantomData<&'a T>,
+}
+
+/// Clone Boilerplate for BuddyAllocator<'a, T, X, M>... - Cannot Derive Naturaly
+//    = note: the following trait bounds were not satisfied:
+//            `Mutex<&mut [u8]>: Clone`
+// 113 | #[derive(Clone)]
+//     |          ^^^^^ unsatisfied trait bound introduced in this `derive` macro
+impl<'a, T, X, const M: usize> Clone for BuddyAllocator<'a, T, X, M>
 where
-    T: Deref<Target = Mutex<&'a mut [u8]>> + Clone + Send + Sync,
+    T: Deref<Target = X> + Send + Sync + Clone,
+    X: RwMutex2<'a> + Send + Sync,
+{
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            phantom: PhantomData,
+        }
+    }
+}
+
+unsafe impl<'a, T, X, const M: usize> Allocator for BuddyAllocator<'a, T, X, M>
+where
+    T: Deref<Target = X> + Send + Sync + Clone,
+    X: RwMutex2<'a> + Send + Sync,
 {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         self.allocate(layout)
@@ -79,13 +152,85 @@ where
     }
 }
 
-/// Buddy Allocator
+impl<'a, T, X, const M: usize> BuddyAllocator<'a, T, X, M>
+where
+    T: Deref<Target = X> + Send + Sync + Clone,
+    X: RwMutex2<'a> + Send + Sync,
+{
+    /// Create a new Buddy Allocator
+    pub fn new(content: T) -> Self {
+        content
+            .lock_mut(|refer| {
+                ProtectedAllocator::<M>(refer).init();
+            })
+            .unwrap();
+        Self {
+            data: content,
+            phantom: PhantomData,
+        }
+    }
+    /// Allocate memory: should help for a global allocator implementation
+    #[inline(always)]
+    pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        self.data
+            .lock_mut(|refer| ProtectedAllocator::<M>(refer).alloc(layout))
+            .unwrap()
+    }
+    /// Deallocate memory: should help for a global allocator implementation
+    #[inline(always)]
+    pub fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        self.data
+            .lock_mut(|refer| {
+                ProtectedAllocator::<M>(refer).dealloc(ptr, layout);
+            })
+            .unwrap();
+    }
+    /// Used only for debug purposes
+    #[cfg(not(feature = "no-std"))]
+    #[allow(dead_code)]
+    fn debug(&self) {
+        self.data
+            .lock_mut(|refer| {
+                for (i, v) in refer.iter().enumerate() {
+                    print!("{:02x} ", v);
+                    if i != 0 && (i + 1) % 32 == 0 {
+                        println!();
+                    }
+                }
+                println!();
+            })
+            .unwrap();
+    }
+}
+
+/// Static Buddy Allocator
 #[repr(C, align(16))]
 pub struct StaticBuddyAllocator<
     X: GenericMutex<&'static mut StaticChunk<SIZE, M>>,
     const SIZE: usize,
     const M: usize = MIN_BUDDY_SIZE,
 >(X);
+
+/// Use only for static allocation
+#[repr(align(4096))]
+pub struct StaticChunk<const SIZE: usize, const M: usize>(pub [u8; SIZE]);
+
+/// Helper to create static const chunks for allocations
+/// Be carefull, static chunks affect hugely the executable's size
+pub const fn create_static_chunk<const SIZE: usize, const M: usize>() -> StaticChunk<SIZE, M> {
+    let mut area: [u8; SIZE] = [0; SIZE];
+    ProtectedAllocator::<M>(&mut area).init();
+    StaticChunk(area)
+}
+
+impl<X: GenericMutex<&'static mut StaticChunk<SIZE, M>>, const SIZE: usize, const M: usize>
+    StaticBuddyAllocator<X, SIZE, M>
+{
+    /// Attach a previously allocated chunk generated by create_static_memory_area()
+    pub const fn attach_static_chunk(mutex: X) -> Self {
+        Self(mutex)
+    }
+}
 
 unsafe impl<X: RwMutex<&'static mut StaticChunk<SIZE, M>>, const SIZE: usize, const M: usize>
     Allocator for StaticBuddyAllocator<X, SIZE, M>
@@ -131,21 +276,6 @@ unsafe impl<X: RwMutex<&'static mut StaticChunk<SIZE, M>>, const SIZE: usize, co
     }
 }
 
-const MIN_BUDDY_SIZE: usize = 64;
-const MAX_BUDDY_SIZE: usize = 0x2000_0000;
-const MAX_SUPPORTED_ALIGN: usize = 4096;
-
-const FIRST_INDEX: usize = 1;
-
-/// Buddy Allocator
-#[derive(Clone)]
-#[repr(C, align(16))]
-pub struct BuddyAllocator<
-    'a,
-    T: Deref<Target = Mutex<&'a mut [u8]>> + Clone + Send + Sync,
-    const M: usize = MIN_BUDDY_SIZE,
->(T);
-
 /// Inner part of BuddyAllocator and StaticBuddyAllocator
 struct ProtectedAllocator<'a, const M: usize>(pub &'a mut [u8]);
 
@@ -154,63 +284,6 @@ struct ProtectedAllocator<'a, const M: usize>(pub &'a mut [u8]);
 struct BuddySize<const M: usize>(usize);
 #[derive(Debug, Copy, Clone)]
 struct Order(u8);
-
-/// Use only for static allocation
-#[repr(align(4096))]
-pub struct StaticChunk<const SIZE: usize, const M: usize>(pub [u8; SIZE]);
-
-impl<'a, T, const M: usize> BuddyAllocator<'a, T, M>
-where
-    T: Deref<Target = Mutex<&'a mut [u8]>> + Clone + Send + Sync,
-{
-    /// Create a new Buddy Allocator
-    pub fn new(content: T) -> Self {
-        ProtectedAllocator::<M>(&mut content.lock().unwrap()).init();
-        Self(content)
-    }
-    /// Allocate memory: should help for a global allocator implementation
-    #[inline(always)]
-    pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let mut refer = self.0.lock().unwrap();
-        ProtectedAllocator::<M>(&mut refer).alloc(layout)
-    }
-    /// Deallocate memory: should help for a global allocator implementation
-    #[inline(always)]
-    pub fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        let mut refer = self.0.lock().unwrap();
-        ProtectedAllocator::<M>(&mut refer).dealloc(ptr, layout);
-    }
-    /// Used only for debug purposes
-    #[cfg(not(feature = "no-std"))]
-    #[allow(dead_code)]
-    fn debug(&self) {
-        let refer = self.0.lock().unwrap();
-        for (i, v) in refer.iter().enumerate() {
-            print!("{:02x} ", v);
-            if i != 0 && (i + 1) % 32 == 0 {
-                println!();
-            }
-        }
-        println!();
-    }
-}
-
-/// Helper to create static const chunks for allocations
-/// Be carefull, static chunks affect hugely the executable's size
-pub const fn create_static_chunk<const SIZE: usize, const M: usize>() -> StaticChunk<SIZE, M> {
-    let mut area: [u8; SIZE] = [0; SIZE];
-    ProtectedAllocator::<M>(&mut area).init();
-    StaticChunk(area)
-}
-
-impl<X: GenericMutex<&'static mut StaticChunk<SIZE, M>>, const SIZE: usize, const M: usize>
-    StaticBuddyAllocator<X, SIZE, M>
-{
-    /// Attach a previously allocated chunk generated by create_static_memory_area()
-    pub const fn attach_static_chunk(mutex: X) -> Self {
-        Self(mutex)
-    }
-}
 
 enum Op {
     Allocate,
@@ -421,6 +494,7 @@ const fn format_error(e: &'static str) -> AllocError {
 #[cfg(test)]
 mod test {
     use super::random::{srand_init, Rand};
+    use super::GenericMutex;
     use super::{create_static_chunk, StaticBuddyAllocator, StaticChunk};
     use super::{Allocator, Layout};
     use super::{BuddyAllocator, BuddySize, Order, ProtectedAllocator};
@@ -437,63 +511,65 @@ mod test {
     mod allocator {
         use super::Allocator;
         use super::BuddyAllocator;
+        use super::GenericMutex;
         use super::{create_static_chunk, StaticBuddyAllocator, StaticChunk};
         use super::{srand_init, Rand};
         use super::{MAX_SUPPORTED_ALIGN, MIN_BUDDY_SIZE};
         use std::sync::{Arc, Mutex};
-        // #[test]
-        // fn fill_and_empty() {
-        //     #[repr(align(4096))]
-        //     struct MemChunk([u8; 256]);
-        //     let mut chunk = MemChunk([0; 256]);
-        //     let alloc: BuddyAllocator<_, 64> =
-        //         BuddyAllocator::new(Arc::new(Mutex::new(chunk.0.as_mut_slice())));
+        #[test]
+        fn fill_and_empty() {
+            #[repr(align(4096))]
+            struct MemChunk([u8; 256]);
+            let mut chunk = MemChunk([0; 256]);
+            let alloc =
+                BuddyAllocator::<_, _, 64>::new(Arc::new(Mutex::new(chunk.0.as_mut_slice())));
 
-        //     let mut v = Vec::new();
-        //     for _ in 0..3 {
-        //         v.push(Box::try_new_in([0xaa_u8; 64], &alloc).expect("AError"));
-        //     }
-        //     let b = Box::try_new_in([0xaa_u8; 64], &alloc);
-        //     if let Ok(_) = b {
-        //         panic!("Should not allocate again");
-        //     }
-        //     drop(v);
-        //     let b = Box::try_new_in([0xaa_u8; 128], &alloc);
-        //     if let Err(_) = &b {
-        //         panic!("Allocation error");
-        //     }
-        // }
-        // #[test]
-        // fn minimal() {
-        //     #[repr(align(4096))]
-        //     struct MemChunk([u8; MIN_BUDDY_SIZE * 2]);
-        //     let mut chunk = MemChunk([0; MIN_BUDDY_SIZE * 2]);
-        //     let alloc: BuddyAllocator<_, 64> =
-        //         BuddyAllocator::new(Arc::new(Mutex::new(chunk.0.as_mut_slice())));
-        //     let b = Box::try_new_in([0xaa_u8; 64], &alloc);
-        //     if let Err(_) = &b {
-        //         panic!("Should be done");
-        //     }
-        //     let g = Box::try_new_in([0xbb_u8; 64], &alloc);
-        //     if let Ok(_v) = &g {
-        //         panic!("Should Fail");
-        //     }
-        // }
-        // #[test]
-        // fn minimal_with_other_generic() {
-        //     #[repr(align(4096))]
-        //     struct MemChunk([u8; MIN_BUDDY_SIZE * 4]);
-        //     let mut chunk = MemChunk([0; MIN_BUDDY_SIZE * 4]);
-        //     let alloc = BuddyAllocator::<_, 128>::new(Arc::new(Mutex::new(chunk.0.as_mut_slice())));
-        //     let b = Box::try_new_in([0xaa_u8; MIN_BUDDY_SIZE * 2], &alloc);
-        //     if let Err(_) = &b {
-        //         panic!("Should be done");
-        //     }
-        //     let g = Box::try_new_in([0xbb_u8; MIN_BUDDY_SIZE * 2], &alloc);
-        //     if let Ok(_v) = &g {
-        //         panic!("Should Fail");
-        //     }
-        // }
+            let mut v = Vec::new();
+            for _ in 0..3 {
+                v.push(Box::try_new_in([0xaa_u8; 64], &alloc).expect("AError"));
+            }
+            let b = Box::try_new_in([0xaa_u8; 64], &alloc);
+            if let Ok(_) = b {
+                panic!("Should not allocate again");
+            }
+            drop(v);
+            let b = Box::try_new_in([0xaa_u8; 128], &alloc);
+            if let Err(_) = &b {
+                panic!("Allocation error");
+            }
+        }
+        #[test]
+        fn minimal() {
+            #[repr(align(4096))]
+            struct MemChunk([u8; MIN_BUDDY_SIZE * 2]);
+            let mut chunk = MemChunk([0; MIN_BUDDY_SIZE * 2]);
+            let alloc: BuddyAllocator<_, _, 64> =
+                BuddyAllocator::new(Arc::new(Mutex::new(chunk.0.as_mut_slice())));
+            let b = Box::try_new_in([0xaa_u8; 64], &alloc);
+            if let Err(_) = &b {
+                panic!("Should be done");
+            }
+            let g = Box::try_new_in([0xbb_u8; 64], &alloc);
+            if let Ok(_v) = &g {
+                panic!("Should Fail");
+            }
+        }
+        #[test]
+        fn minimal_with_other_generic() {
+            #[repr(align(4096))]
+            struct MemChunk([u8; MIN_BUDDY_SIZE * 4]);
+            let mut chunk = MemChunk([0; MIN_BUDDY_SIZE * 4]);
+            let alloc =
+                BuddyAllocator::<_, _, 128>::new(Arc::new(Mutex::new(chunk.0.as_mut_slice())));
+            let b = Box::try_new_in([0xaa_u8; MIN_BUDDY_SIZE * 2], &alloc);
+            if let Err(_) = &b {
+                panic!("Should be done");
+            }
+            let g = Box::try_new_in([0xbb_u8; MIN_BUDDY_SIZE * 2], &alloc);
+            if let Ok(_v) = &g {
+                panic!("Should Fail");
+            }
+        }
         // ___ These tests are the most important ___
         const NB_TESTS: usize = 4096;
         const MO: usize = 1024 * 1024;
@@ -547,49 +623,49 @@ mod test {
                 panic!("This allocation is impossible");
             }
         }
-        // static mut CHUNK: MemChunk = MemChunk([0; CHUNK_SIZE]);
-        // #[test]
-        // fn memory_sodomizer() {
-        //     srand_init(10);
-        //     for _ in 0..4 {
-        //         let alloc: BuddyAllocator<_, 64> =
-        //             BuddyAllocator::new(Arc::new(Mutex::new(unsafe { CHUNK.0.as_mut_slice() })));
-        //         repeat_test(&alloc);
-        //         final_test(&alloc);
-        //     }
-        // }
-        // #[test]
-        // fn memory_sodomizer_multithreaded() {
-        //     srand_init(21);
-        //     let mut memory = vec![0x21_u8; CHUNK_SIZE + MAX_SUPPORTED_ALIGN];
-        //     let (_prefix, aligned_memory, _suffix) = unsafe { memory.align_to_mut::<MemChunk>() };
-        //     // thread::spawn can only take static reference so force the compiler by
-        //     // transmuting to cast reference as static. And ensure you manually that
-        //     // the object will continue to live.
-        //     let refer = &mut aligned_memory[0].0;
-        //     let refer_static =
-        //         unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(refer) };
-        //     let alloc: BuddyAllocator<_, 64> =
-        //         BuddyAllocator::new(Arc::new(Mutex::new(refer_static)));
-        //     let mut thread_list = Vec::new();
-        //     for _ in 0..4 {
-        //         let clone = alloc.clone();
-        //         thread_list.push(std::thread::spawn(move || {
-        //             repeat_test(&clone);
-        //         }));
-        //     }
-        //     for thread in thread_list.into_iter() {
-        //         drop(thread.join());
-        //     }
-        //     final_test(&alloc);
-        // }
+        static mut CHUNK: MemChunk = MemChunk([0; CHUNK_SIZE]);
+        #[test]
+        fn memory_sodomizer() {
+            srand_init(10);
+            for _ in 0..4 {
+                let alloc: BuddyAllocator<_, _, 64> =
+                    BuddyAllocator::new(Arc::new(Mutex::new(unsafe { CHUNK.0.as_mut_slice() })));
+                repeat_test(&alloc);
+                final_test(&alloc);
+            }
+        }
+        #[test]
+        fn memory_sodomizer_multithreaded() {
+            srand_init(21);
+            let mut memory = vec![0x21_u8; CHUNK_SIZE + MAX_SUPPORTED_ALIGN];
+            let (_prefix, aligned_memory, _suffix) = unsafe { memory.align_to_mut::<MemChunk>() };
+            // thread::spawn can only take static reference so force the compiler by
+            // transmuting to cast reference as static. And ensure you manually that
+            // the object will continue to live.
+            let refer = &mut aligned_memory[0].0;
+            let refer_static =
+                unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(refer) };
+            let alloc: BuddyAllocator<_, _, 64> =
+                BuddyAllocator::new(Arc::new(Mutex::new(refer_static)));
+            let mut thread_list = Vec::new();
+            for _ in 0..4 {
+                let clone = alloc.clone();
+                thread_list.push(std::thread::spawn(move || {
+                    repeat_test(&clone);
+                }));
+            }
+            for thread in thread_list.into_iter() {
+                drop(thread.join());
+            }
+            final_test(&alloc);
+        }
         const MIN_CELL_LEN: usize = 64;
         static mut MEMORY_FIELD: StaticChunk<CHUNK_SIZE, MIN_CELL_LEN> = create_static_chunk();
         static STATIC_ALLOC: StaticBuddyAllocator<
             Mutex<&mut StaticChunk<CHUNK_SIZE, MIN_CELL_LEN>>,
             CHUNK_SIZE,
-            64,
-        > = StaticBuddyAllocator::attach_static_chunk(Mutex::new(unsafe { &mut MEMORY_FIELD }));
+            MIN_CELL_LEN,
+        > = StaticBuddyAllocator::attach_static_chunk(Mutex::create(unsafe { &mut MEMORY_FIELD }));
         #[test]
         fn memory_sodomizer_multithreaded_with_static() {
             srand_init(42);
