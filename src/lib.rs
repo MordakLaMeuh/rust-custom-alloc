@@ -40,6 +40,7 @@ mod math;
 use math::{round_up_2, trailing_zero_right};
 #[macro_use]
 mod macros;
+mod mutex;
 
 #[cfg(test)]
 mod random;
@@ -55,6 +56,7 @@ use core::ops::Deref;
 #[cfg(all(feature = "no-std", not(test)))]
 use core::ptr::null_mut;
 use core::ptr::NonNull;
+pub use mutex::{GenericMutex, RoMutex, RwMutex};
 #[cfg(not(feature = "no-std"))]
 use std::{alloc::handle_alloc_error, sync::Mutex};
 
