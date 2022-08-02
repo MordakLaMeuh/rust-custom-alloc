@@ -8,23 +8,14 @@ use core::fmt::Debug;
 
 /// Simple creation of a new Mutex
 pub trait GenericMutex<T>: Sized {
-    /// Error on creation
-    type CreationError: Debug;
-    /// Create a new mutex of this type.
-    fn create(v: T) -> Result<Self, Self::CreationError>;
+    /// Create a new Mutex
+    fn create(v: T) -> Self;
 }
 
 /// A read-only (immutable) mutex.
 ///
 /// This means, the value it shares is immutable, but only a single context may
 /// have exclusive access.
-///
-/// `RwMutex`es can implement this trait automatically using
-/// ```
-/// # use embedded_hal::mutex;
-/// # struct MyMutex<T>(T);
-/// impl<T> mutex::default::DefaultRo for MyMutex<T> { }
-/// ```
 pub trait RoMutex<T>: GenericMutex<T> {
     /// Locking error
     type Error: Debug;
@@ -40,13 +31,6 @@ pub trait RoMutex<T>: GenericMutex<T> {
 ///
 /// This mutex type is similar to the Mutex from `std`.  When you lock it, you
 /// get access to a mutable reference.
-///
-/// This trait can automatically be implemented for `RoMutex<RefCell<T>>` by using
-/// ```
-/// # use embedded_hal::mutex;
-/// # struct MyMutex<T>(T);
-/// impl<T> mutex::default::RefCellRw for MyMutex<T> { }
-/// ```
 pub trait RwMutex<T>: GenericMutex<T> {
     /// Locking error
     type Error: Debug;
@@ -64,10 +48,8 @@ mod std {
     use std::sync::Mutex;
 
     impl<T> const GenericMutex<T> for Mutex<T> {
-        type CreationError = ();
-
-        fn create(v: T) -> Result<Self, Self::CreationError> {
-            Ok(Mutex::new(v))
+        fn create(v: T) -> Self {
+            Mutex::new(v)
         }
     }
 
