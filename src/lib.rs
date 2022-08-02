@@ -70,12 +70,10 @@ where
     T: Deref<Target = Mutex<&'a mut [u8]>> + Clone + Send + Sync,
 {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let mut refer = self.0.lock().unwrap();
-        ProtectedAllocator::<M>(&mut refer).alloc(layout)
+        self.allocate(layout)
     }
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        let mut refer = self.0.lock().unwrap();
-        ProtectedAllocator::<M>(&mut refer).dealloc(ptr, layout);
+        self.deallocate(ptr, layout);
     }
 }
 
@@ -147,10 +145,20 @@ where
 {
     /// Create a new Buddy Allocator
     pub fn new(content: T) -> Self {
-        let mut refer = content.lock().unwrap();
-        ProtectedAllocator::<M>(&mut refer).init();
-        drop(refer);
+        ProtectedAllocator::<M>(&mut content.lock().unwrap()).init();
         Self(content)
+    }
+    /// Allocate memory: should help for a global allocator implementation
+    #[inline(always)]
+    pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        let mut refer = self.0.lock().unwrap();
+        ProtectedAllocator::<M>(&mut refer).alloc(layout)
+    }
+    /// Deallocate memory: should help for a global allocator implementation
+    #[inline(always)]
+    pub fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        let mut refer = self.0.lock().unwrap();
+        ProtectedAllocator::<M>(&mut refer).dealloc(ptr, layout);
     }
     /// Used only for debug purposes
     #[cfg(not(feature = "no-std"))]
