@@ -44,21 +44,19 @@ mod macros;
 #[cfg(test)]
 mod random;
 
+// TODO: Find a solution with no_std
+// TODO: Draw nodes to explain the Buddy research update tree
 // TODO: Select location of buddy Metadata
 // TODO: Allow more memory space to be addressable
 // TODO: Reserve blocks
-// TODO: Find a solution with no_std
+// TODO: Create good documentations
 use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
-use core::mem::forget;
+use core::ops::Deref;
 #[cfg(all(feature = "no-std", not(test)))]
 use core::ptr::null_mut;
 use core::ptr::NonNull;
 #[cfg(not(feature = "no-std"))]
-use std::alloc::handle_alloc_error;
-#[cfg(not(feature = "no-std"))]
-use std::sync::{Arc, Mutex};
-// TODO: Create good documentations
-// TODO: Draw nodes to explain the Buddy research update tree
+use std::{alloc::handle_alloc_error, sync::Mutex};
 
 /// #![cfg_attr(all(feature = "no-std", not(test)), feature(alloc_error_handler))]
 /// #[cfg(all(feature = "no-std", not(test)))]
@@ -67,39 +65,35 @@ use std::sync::{Arc, Mutex};
 ///     panic!("Sa mere");
 /// }
 
-unsafe impl<'a, const M: usize> Allocator for BuddyAllocator<'a, M> {
+unsafe impl<'a, T, const M: usize> Allocator for BuddyAllocator<'a, T, M>
+where
+    T: Deref<Target = Mutex<&'a mut [u8]>> + Clone + Send + Sync,
+{
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        // println!("[Alloc size: {} align: {}]", layout.size(), layout.align());
-        // self.debug();
-        let out = self.0.lock().unwrap().alloc(layout);
-        // self.debug();
-        out
+        let mut refer = self.0.lock().unwrap();
+        ProtectedAllocator::<M>(&mut refer).alloc(layout)
     }
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        // println!(
-        //     "[Free size: {} align: {} ptr: {:?}]",
-        //     layout.size(),
-        //     layout.align(),
-        //     ptr
-        // );
-        // self.debug();
-        self.0.lock().unwrap().dealloc(ptr, layout);
-        // self.debug();
+        let mut refer = self.0.lock().unwrap();
+        ProtectedAllocator::<M>(&mut refer).dealloc(ptr, layout);
     }
 }
 
-unsafe impl<'a, const M: usize> Allocator for StaticBuddyAllocator<'a, M> {
+unsafe impl<const M: usize> Allocator for StaticBuddyAllocator<M> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.0.lock().unwrap().alloc(layout)
+        let mut refer = self.0.lock().unwrap();
+        ProtectedAllocator::<M>(&mut refer).alloc(layout)
     }
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        self.0.lock().unwrap().dealloc(ptr, layout);
+        let mut refer = self.0.lock().unwrap();
+        ProtectedAllocator::<M>(&mut refer).dealloc(ptr, layout);
     }
 }
 
-unsafe impl<'a, const M: usize> GlobalAlloc for StaticBuddyAllocator<'a, M> {
+unsafe impl<const M: usize> GlobalAlloc for StaticBuddyAllocator<M> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        match self.0.lock().unwrap().alloc(layout) {
+        let mut refer = self.0.lock().unwrap();
+        match ProtectedAllocator::<M>(&mut refer).alloc(layout) {
             Ok(non_null) => non_null.as_mut_ptr(),
             Err(_) => {
                 #[cfg(not(feature = "no-std"))]
@@ -110,10 +104,8 @@ unsafe impl<'a, const M: usize> GlobalAlloc for StaticBuddyAllocator<'a, M> {
         }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        self.0
-            .lock()
-            .unwrap()
-            .dealloc(NonNull::new(ptr).unwrap(), layout);
+        let mut refer = self.0.lock().unwrap();
+        ProtectedAllocator::<M>(&mut refer).dealloc(NonNull::new(ptr).unwrap(), layout);
     }
 }
 
@@ -125,17 +117,18 @@ const FIRST_INDEX: usize = 1;
 
 /// Buddy Allocator
 #[repr(C, align(16))]
-pub struct StaticBuddyAllocator<'a, const M: usize = MIN_BUDDY_SIZE>(
-    Mutex<ProtectedAllocator<'a, M>>,
-);
+pub struct StaticBuddyAllocator<const M: usize = MIN_BUDDY_SIZE>(Mutex<&'static mut [u8]>);
 
 /// Buddy Allocator
 #[derive(Clone)]
 #[repr(C, align(16))]
-pub struct BuddyAllocator<'a, const M: usize = MIN_BUDDY_SIZE>(
-    Arc<Mutex<ProtectedAllocator<'a, M>>>,
-);
+pub struct BuddyAllocator<
+    'a,
+    T: Deref<Target = Mutex<&'a mut [u8]>> + Clone + Send + Sync,
+    const M: usize = MIN_BUDDY_SIZE,
+>(T);
 
+/// Inner part of BuddyAllocator and StaticBuddyAllocator
 struct ProtectedAllocator<'a, const M: usize>(pub &'a mut [u8]);
 
 // ___ Requested Buddy Size and Order with their TryFrom<_> boilerplates ___
@@ -148,16 +141,23 @@ struct Order(u8);
 #[repr(align(4096))]
 pub struct StaticChunk<const SIZE: usize, const M: usize>(pub [u8; SIZE]);
 
-impl<'a, const M: usize> BuddyAllocator<'a, M> {
+impl<'a, T, const M: usize> BuddyAllocator<'a, T, M>
+where
+    T: Deref<Target = Mutex<&'a mut [u8]>> + Clone + Send + Sync,
+{
     /// Create a new Buddy Allocator
-    pub fn new(address: &'a mut [u8]) -> Self {
-        Self(Arc::new(Mutex::new(ProtectedAllocator::new(address))))
+    pub fn new(content: T) -> Self {
+        let mut refer = content.lock().unwrap();
+        ProtectedAllocator::<M>(&mut refer).init();
+        drop(refer);
+        Self(content)
     }
     /// Used only for debug purposes
     #[cfg(not(feature = "no-std"))]
     #[allow(dead_code)]
     fn debug(&self) {
-        for (i, v) in self.0.lock().unwrap().0.iter().enumerate() {
+        let refer = self.0.lock().unwrap();
+        for (i, v) in refer.iter().enumerate() {
             print!("{:02x} ", v);
             if i != 0 && (i + 1) % 32 == 0 {
                 println!();
@@ -171,20 +171,16 @@ impl<'a, const M: usize> BuddyAllocator<'a, M> {
 /// Be carefull, static chunks affect hugely the executable's size
 pub const fn create_static_chunk<const SIZE: usize, const M: usize>() -> StaticChunk<SIZE, M> {
     let mut area: [u8; SIZE] = [0; SIZE];
-    forget(StaticBuddyAllocator::<M>::new(&mut area));
+    ProtectedAllocator::<M>(&mut area).init();
     StaticChunk(area)
 }
 
-impl<'a, const M: usize> StaticBuddyAllocator<'a, M> {
-    // ___ Create a new Buddy Allocator on a previous allocated block ___
-    const fn new(address: &'a mut [u8]) -> Self {
-        Self(Mutex::new(ProtectedAllocator::new(address)))
-    }
+impl<const M: usize> StaticBuddyAllocator<M> {
     /// Attach a previously allocated chunk generated by create_static_memory_area()
     pub const fn attach_static_chunk<const SIZE: usize>(
         address: &'static mut StaticChunk<SIZE, M>,
     ) -> Self {
-        Self(Mutex::new(ProtectedAllocator::attach_static_chunk(address)))
+        Self(Mutex::new(&mut address.0))
     }
 }
 
@@ -194,24 +190,24 @@ enum Op {
 }
 
 impl<'a, const M: usize> ProtectedAllocator<'a, M> {
-    const fn new(address: &'a mut [u8]) -> Self {
+    const fn init(&'a mut self) {
         assert!(M >= MIN_BUDDY_SIZE);
         assert!(M <= MAX_BUDDY_SIZE);
         assert!(round_up_2(M as u32) as usize == M);
-        assert!(address.len() <= MAX_BUDDY_SIZE);
-        assert!(address.len() >= M * 2);
-        let space_rounded_up_2 = round_up_2(address.len() as u32) as usize;
-        let space_order0_buddy = if space_rounded_up_2 == address.len() {
-            address.len()
+        assert!(self.0.len() <= MAX_BUDDY_SIZE);
+        assert!(self.0.len() >= M * 2);
+        let space_rounded_up_2 = round_up_2(self.0.len() as u32) as usize;
+        let space_order0_buddy = if space_rounded_up_2 == self.0.len() {
+            self.0.len()
         } else {
             space_rounded_up_2 >> 1
         };
-        let current_align = if address.len() > MAX_SUPPORTED_ALIGN {
+        let current_align = if self.0.len() > MAX_SUPPORTED_ALIGN {
             MAX_SUPPORTED_ALIGN
         } else {
-            address.len()
+            self.0.len()
         };
-        let ptr_offset = address.as_mut_ptr().align_offset(current_align);
+        let ptr_offset = self.0.as_mut_ptr().align_offset(current_align);
         // IMPORTANT: On compile time with const fn feature, align_offset() doesn't works
         // and returns USIZE::MAX. Trust on you. Can't be sure...
         assert!(ptr_offset == 0 || ptr_offset == usize::MAX); // Check pointer alignement
@@ -233,7 +229,7 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
         let (mut current_order, mut members, mut index) = (0, 2, 0);
         while index < bytes_needed {
             members -= 1;
-            address[index] = current_order;
+            self.0[index] = current_order;
             if members == 0 {
                 current_order += 1;
                 members = 1 << current_order;
@@ -241,9 +237,8 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
             index += 1;
         }
         // ___ Bootstrap memory for metadata ___
-        let mut this = Self(address.get_mut(0..space_order0_buddy).unwrap());
         let metadata_chunk_size = max!(bytes_needed, M);
-        let _r = this
+        let _r = self
             .alloc(
                 Layout::from_size_align(metadata_chunk_size, M)
                     .ok()
@@ -251,7 +246,6 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
             )
             .ok()
             .expect("Woot ? Already insuffisant memory ?!? That Buddy Allocator sucks !");
-        this
     }
     const fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         match BuddySize::try_from(layout) {
@@ -271,9 +265,6 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
             },
             Err(e) => panic!("{}", e),
         }
-    }
-    const fn attach_static_chunk<const SIZE: usize>(chunk: &'a mut StaticChunk<SIZE, M>) -> Self {
-        Self(&mut chunk.0)
     }
     const fn set_mark(&mut self, buddy_size: BuddySize<M>) -> Result<NonNull<[u8]>, &'static str> {
         let order = Order::try_from((buddy_size, BuddySize(self.0.len())))?.0;
@@ -406,7 +397,6 @@ mod test {
     use super::{Allocator, Layout};
     use super::{BuddyAllocator, BuddySize, Order, ProtectedAllocator};
     use super::{MAX_BUDDY_SIZE, MAX_SUPPORTED_ALIGN, MIN_BUDDY_SIZE};
-
     const MEMORY_FIELD_SIZE: usize = MAX_BUDDY_SIZE;
     #[repr(align(4096))]
     struct MemoryField {
@@ -422,12 +412,14 @@ mod test {
         use super::{create_static_chunk, StaticBuddyAllocator, StaticChunk};
         use super::{srand_init, Rand};
         use super::{MAX_SUPPORTED_ALIGN, MIN_BUDDY_SIZE};
+        use std::sync::{Arc, Mutex};
         #[test]
         fn fill_and_empty() {
             #[repr(align(4096))]
             struct MemChunk([u8; 256]);
             let mut chunk = MemChunk([0; 256]);
-            let alloc: BuddyAllocator<64> = BuddyAllocator::new(&mut chunk.0);
+            let alloc: BuddyAllocator<_, 64> =
+                BuddyAllocator::new(Arc::new(Mutex::new(chunk.0.as_mut_slice())));
 
             let mut v = Vec::new();
             for _ in 0..3 {
@@ -448,7 +440,8 @@ mod test {
             #[repr(align(4096))]
             struct MemChunk([u8; MIN_BUDDY_SIZE * 2]);
             let mut chunk = MemChunk([0; MIN_BUDDY_SIZE * 2]);
-            let alloc: BuddyAllocator<64> = BuddyAllocator::new(&mut chunk.0);
+            let alloc: BuddyAllocator<_, 64> =
+                BuddyAllocator::new(Arc::new(Mutex::new(chunk.0.as_mut_slice())));
             let b = Box::try_new_in([0xaa_u8; 64], &alloc);
             if let Err(_) = &b {
                 panic!("Should be done");
@@ -463,7 +456,7 @@ mod test {
             #[repr(align(4096))]
             struct MemChunk([u8; MIN_BUDDY_SIZE * 4]);
             let mut chunk = MemChunk([0; MIN_BUDDY_SIZE * 4]);
-            let alloc = BuddyAllocator::<128>::new(&mut chunk.0);
+            let alloc = BuddyAllocator::<_, 128>::new(Arc::new(Mutex::new(chunk.0.as_mut_slice())));
             let b = Box::try_new_in([0xaa_u8; MIN_BUDDY_SIZE * 2], &alloc);
             if let Err(_) = &b {
                 panic!("Should be done");
@@ -531,7 +524,8 @@ mod test {
         fn memory_sodomizer() {
             srand_init(10);
             for _ in 0..4 {
-                let alloc: BuddyAllocator<64> = BuddyAllocator::new(unsafe { &mut CHUNK.0 });
+                let alloc: BuddyAllocator<_, 64> =
+                    BuddyAllocator::new(Arc::new(Mutex::new(unsafe { CHUNK.0.as_mut_slice() })));
                 repeat_test(&alloc);
                 final_test(&alloc);
             }
@@ -547,7 +541,8 @@ mod test {
             let refer = &mut aligned_memory[0].0;
             let refer_static =
                 unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(refer) };
-            let alloc: BuddyAllocator<64> = BuddyAllocator::new(refer_static);
+            let alloc: BuddyAllocator<_, 64> =
+                BuddyAllocator::new(Arc::new(Mutex::new(refer_static)));
             let mut thread_list = Vec::new();
             for _ in 0..4 {
                 let clone = alloc.clone();
@@ -684,100 +679,114 @@ mod test {
         use super::*;
         #[test]
         fn minimal_mem_block() {
-            ProtectedAllocator::<MIN_BUDDY_SIZE>::new(unsafe {
+            ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
                 &mut MEMORY_FIELD.array[..MIN_BUDDY_SIZE * 2]
-            });
+            })
+            .init();
         }
         #[should_panic]
         #[test]
         fn too_small_mem_block() {
-            ProtectedAllocator::<MIN_BUDDY_SIZE>::new(unsafe {
+            ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
                 &mut MEMORY_FIELD.array[..MIN_BUDDY_SIZE]
-            });
+            })
+            .init();
         }
         #[test]
         fn maximal_mem_block() {
-            ProtectedAllocator::<MIN_BUDDY_SIZE>::new(unsafe {
+            ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
                 std::slice::from_raw_parts_mut(MEMORY_FIELD.array.as_mut_ptr(), MAX_BUDDY_SIZE)
-            });
+            })
+            .init();
         }
         #[should_panic]
         #[test]
         fn too_big_mem_block() {
-            ProtectedAllocator::<MIN_BUDDY_SIZE>::new(unsafe {
+            ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
                 std::slice::from_raw_parts_mut(
                     MEMORY_FIELD.array.as_mut_ptr(),
                     MAX_BUDDY_SIZE + 0x1000,
                 )
-            });
+            })
+            .init();
         }
         #[test]
         fn aligned_mem_block1() {
-            ProtectedAllocator::<MIN_BUDDY_SIZE>::new(unsafe {
+            ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
                 &mut MEMORY_FIELD.array[MIN_BUDDY_SIZE * 2..MIN_BUDDY_SIZE * 4]
-            });
+            })
+            .init();
         }
         #[should_panic]
         #[test]
         fn bad_aligned_mem_block1() {
-            ProtectedAllocator::<MIN_BUDDY_SIZE>::new(unsafe {
+            ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
                 &mut MEMORY_FIELD.array[4..MIN_BUDDY_SIZE * 2 + 4]
-            });
+            })
+            .init();
         }
         #[test]
         fn aligned_mem_block2() {
-            ProtectedAllocator::<MIN_BUDDY_SIZE>::new(unsafe {
+            ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
                 &mut MEMORY_FIELD.array[MIN_BUDDY_SIZE * 8..MIN_BUDDY_SIZE * 16]
-            });
+            })
+            .init();
         }
         #[should_panic]
         #[test]
         fn bad_aligned_mem_block2() {
-            ProtectedAllocator::<MIN_BUDDY_SIZE>::new(unsafe {
+            ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
                 &mut MEMORY_FIELD.array[MIN_BUDDY_SIZE * 9..MIN_BUDDY_SIZE * 17]
-            });
+            })
+            .init();
         }
         #[test]
         fn aligned_mem_block3() {
-            ProtectedAllocator::<MIN_BUDDY_SIZE>::new(unsafe {
+            ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
                 &mut MEMORY_FIELD.array[MAX_SUPPORTED_ALIGN..MAX_SUPPORTED_ALIGN * 17]
-            });
+            })
+            .init();
         }
         #[should_panic]
         #[test]
         fn bad_aligned_mem_block3() {
-            ProtectedAllocator::<MIN_BUDDY_SIZE>::new(unsafe {
+            ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
                 &mut MEMORY_FIELD.array[(MAX_SUPPORTED_ALIGN / 2)
                     ..(MAX_SUPPORTED_ALIGN * 16) + (MAX_SUPPORTED_ALIGN / 2)]
-            });
+            })
+            .init();
         }
         #[test]
         fn generic_size_changed() {
-            ProtectedAllocator::<{ MIN_BUDDY_SIZE * 2 }>::new(unsafe {
+            ProtectedAllocator::<{ MIN_BUDDY_SIZE * 2 }>(unsafe {
                 &mut MEMORY_FIELD.array[..MIN_BUDDY_SIZE * 4]
-            });
+            })
+            .init();
         }
         #[should_panic]
         #[test]
         fn generic_below_min_size() {
-            ProtectedAllocator::<{ MIN_BUDDY_SIZE / 2 }>::new(unsafe {
+            ProtectedAllocator::<{ MIN_BUDDY_SIZE / 2 }>(unsafe {
                 &mut MEMORY_FIELD.array[..MIN_BUDDY_SIZE * 4]
-            });
+            })
+            .init();
         }
 
         #[should_panic]
         #[test]
         fn generic_above_min_size() {
-            ProtectedAllocator::<MAX_BUDDY_SIZE>::new(unsafe {
+            ProtectedAllocator::<MAX_BUDDY_SIZE>(unsafe {
                 &mut MEMORY_FIELD.array[..MAX_BUDDY_SIZE]
-            });
+            })
+            .init();
         }
         #[should_panic]
         #[test]
         fn generic_unaligned_min_size() {
-            ProtectedAllocator::<{ MIN_BUDDY_SIZE / 2 * 3 }>::new(unsafe {
+            ProtectedAllocator::<{ MIN_BUDDY_SIZE / 2 * 3 }>(unsafe {
                 &mut MEMORY_FIELD.array[..MAX_BUDDY_SIZE]
-            });
+            })
+            .init();
         }
     }
 }
