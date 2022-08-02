@@ -1,4 +1,5 @@
 //! Generic mutex traits
+//! Partially copied from Trait Mutex crate
 //!
 //! The traits in this module allow code to be generic over the mutex type used.
 //! The types implementing these traits must guarantee that access is always
@@ -8,8 +9,11 @@ use core::fmt::Debug;
 
 /// Simple creation of a new Mutex
 pub trait GenericMutex<T>: Sized {
+    /// Creation errpr
+    type CreationError: Debug;
+
     /// Create a new Mutex
-    fn create(v: T) -> Self;
+    fn create(v: T) -> Result<Self, Self::CreationError>;
 }
 
 /// A read-only (immutable) mutex.
@@ -42,15 +46,18 @@ pub trait RwMutex<T>: GenericMutex<T> {
     fn lock_mut<R>(&self, f: impl FnOnce(&mut T) -> R) -> Result<R, Self::Error>;
 }
 
-#[cfg(not(feature = "no-std"))]
-mod std {
+#[cfg(all(not(feature = "no-std"), not(feature = "no-generic-std-mutex-impl")))]
+mod std_mutex {
     use super::{GenericMutex, RwMutex};
+
     use std::sync::Mutex;
 
     impl<T> const GenericMutex<T> for Mutex<T> {
+        type CreationError = ();
+
         #[inline(always)]
-        fn create(v: T) -> Self {
-            Mutex::new(v)
+        fn create(v: T) -> Result<Self, Self::CreationError> {
+            Ok(Mutex::new(v))
         }
     }
 

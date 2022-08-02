@@ -13,5 +13,6 @@ members = []
 
 [features]
 no-std = []
+no-generic-std-mutex-impl = []
 
 [dev-dependencies]

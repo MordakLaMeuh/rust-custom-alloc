@@ -57,9 +57,11 @@ use core::ops::Deref;
 #[cfg(all(feature = "no-std", not(test)))]
 use core::ptr::null_mut;
 use core::ptr::NonNull;
-pub use mutex::{GenericMutex, RoMutex, RwMutex};
 #[cfg(not(feature = "no-std"))]
-use std::{alloc::handle_alloc_error, sync::Mutex};
+use std::alloc::handle_alloc_error;
+
+/// These traits are exported to implement with your own Mutex
+pub use mutex::{GenericMutex, RoMutex, RwMutex};
 
 // #![cfg_attr(all(feature = "no-std", not(test)), feature(alloc_error_handler))]
 // #[cfg(all(feature = "no-std", not(test)))]
@@ -74,47 +76,12 @@ const MAX_SUPPORTED_ALIGN: usize = 4096;
 
 const FIRST_INDEX: usize = 1;
 
-/// Simple creation of a new Mutex
-pub trait GenericMutex2<'a>: Sized {
-    /// Create a new Mutex
-    fn create(v: &'a mut [u8]) -> Self;
-}
-
-/// DOC
-pub trait RwMutex2<'a>: GenericMutex2<'a> {
-    /// Locking error
-    type Error: core::fmt::Debug;
-
-    /// Lock the mutex for the duration of a closure
-    ///
-    /// `lock_mut` will call a closure with a mutable reference to the unlocked
-    /// mutex's value.
-    fn lock_mut<R>(&self, f: impl FnOnce(&mut [u8]) -> R) -> Result<R, Self::Error>;
-}
-
-impl<'a> const GenericMutex2<'a> for Mutex<&'a mut [u8]> {
-    #[inline(always)]
-    fn create(v: &'a mut [u8]) -> Self {
-        Mutex::new(v)
-    }
-}
-
-impl<'a> RwMutex2<'a> for Mutex<&'a mut [u8]> {
-    type Error = ();
-
-    #[inline(always)]
-    fn lock_mut<R>(&self, f: impl FnOnce(&mut [u8]) -> R) -> Result<R, Self::Error> {
-        let mut v = self.lock().unwrap();
-        Ok(f(&mut v))
-    }
-}
-
 /// Buddy Allocator
 #[repr(C, align(16))]
 pub struct BuddyAllocator<
     'a,
     T: Deref<Target = X> + Send + Sync + Clone,
-    X: RwMutex2<'a> + Send + Sync,
+    X: RwMutex<&'a mut [u8]> + Send + Sync,
     const M: usize = MIN_BUDDY_SIZE,
 > {
     data: T,
@@ -129,7 +96,7 @@ pub struct BuddyAllocator<
 impl<'a, T, X, const M: usize> Clone for BuddyAllocator<'a, T, X, M>
 where
     T: Deref<Target = X> + Send + Sync + Clone,
-    X: RwMutex2<'a> + Send + Sync,
+    X: RwMutex<&'a mut [u8]> + Send + Sync,
 {
     fn clone(&self) -> Self {
         Self {
@@ -142,7 +109,7 @@ where
 unsafe impl<'a, T, X, const M: usize> Allocator for BuddyAllocator<'a, T, X, M>
 where
     T: Deref<Target = X> + Send + Sync + Clone,
-    X: RwMutex2<'a> + Send + Sync,
+    X: RwMutex<&'a mut [u8]> + Send + Sync,
 {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         self.allocate(layout)
@@ -155,7 +122,7 @@ where
 impl<'a, T, X, const M: usize> BuddyAllocator<'a, T, X, M>
 where
     T: Deref<Target = X> + Send + Sync + Clone,
-    X: RwMutex2<'a> + Send + Sync,
+    X: RwMutex<&'a mut [u8]> + Send + Sync,
 {
     /// Create a new Buddy Allocator
     pub fn new(content: T) -> Self {
@@ -494,7 +461,6 @@ const fn format_error(e: &'static str) -> AllocError {
 #[cfg(test)]
 mod test {
     use super::random::{srand_init, Rand};
-    use super::GenericMutex;
     use super::{create_static_chunk, StaticBuddyAllocator, StaticChunk};
     use super::{Allocator, Layout};
     use super::{BuddyAllocator, BuddySize, Order, ProtectedAllocator};
@@ -511,7 +477,6 @@ mod test {
     mod allocator {
         use super::Allocator;
         use super::BuddyAllocator;
-        use super::GenericMutex;
         use super::{create_static_chunk, StaticBuddyAllocator, StaticChunk};
         use super::{srand_init, Rand};
         use super::{MAX_SUPPORTED_ALIGN, MIN_BUDDY_SIZE};
@@ -665,7 +630,7 @@ mod test {
             Mutex<&mut StaticChunk<CHUNK_SIZE, MIN_CELL_LEN>>,
             CHUNK_SIZE,
             MIN_CELL_LEN,
-        > = StaticBuddyAllocator::attach_static_chunk(Mutex::create(unsafe { &mut MEMORY_FIELD }));
+        > = StaticBuddyAllocator::attach_static_chunk(Mutex::new(unsafe { &mut MEMORY_FIELD }));
         #[test]
         fn memory_sodomizer_multithreaded_with_static() {
             srand_init(42);
