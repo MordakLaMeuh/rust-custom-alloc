@@ -1,7 +1,9 @@
 mod random;
 use random::{srand_init, Rand};
 
+use super::protected_allocator::*;
 use super::*;
+
 mod allocator {
     use super::*;
     use std::sync::{Arc, Mutex};

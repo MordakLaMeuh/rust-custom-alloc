@@ -1,5 +1,5 @@
 //! Generic mutex traits
-//! Partially copied from Trait Mutex crate
+//! Hugely copied from Trait Mutex crate
 //!
 //! The traits in this module allow code to be generic over the mutex type used.
 //! The types implementing these traits must guarantee that access is always
