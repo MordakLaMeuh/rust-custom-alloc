@@ -30,7 +30,8 @@
 #![const_eval_limit = "0"]
 // Allow to use addr() fm on std::ptr
 #![feature(strict_provenance)]
-
+// CFG attributes directly inside function for expressions
+#![feature(stmt_expr_attributes)]
 // ___ Testing on 64bits system Linux (with address sanitizer) ___
 // RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo test -Zbuild-std --target x86_64-unknown-linux-gnu
 // ___ Testing on 32bits system Linux (address sanitizer is unaivalable for this arch) ___
@@ -43,13 +44,13 @@ mod protected_allocator;
 mod tests;
 // TODO: Draw nodes to explain the Buddy research update tree
 // TODO: Select location of buddy Metadata
-// TODO: Allow more memory space to be addressable
+// TODO: Create test of allowing more memory space to be addressable
 // TODO: Reserve blocks
 // TODO: Create good documentations
 use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
 use core::marker::PhantomData;
 use core::ops::Deref;
-#[cfg(all(feature = "no-std", not(test)))]
+#[cfg(feature = "no-std")]
 use core::ptr::null_mut;
 use core::ptr::NonNull;
 #[cfg(not(feature = "no-std"))]
@@ -130,7 +131,11 @@ where
     #[inline(always)]
     pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         self.data
-            .lock_mut(|refer| ProtectedAllocator::<M>(refer).alloc(layout))
+            .lock_mut(|refer| {
+                ProtectedAllocator::<M>(refer)
+                    .alloc(layout)
+                    .map_err(|e| e.into())
+            })
             .unwrap()
     }
     /// Deallocate memory: should help for a global allocator implementation
@@ -138,7 +143,7 @@ where
     pub fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         self.data
             .lock_mut(|refer| {
-                ProtectedAllocator::<M>(refer).dealloc(ptr, layout);
+                ProtectedAllocator::<M>(refer).dealloc(ptr, layout).unwrap();
             })
             .unwrap();
     }
@@ -190,14 +195,20 @@ impl<X: RwMutex<&'static mut StaticChunk<SIZE, M>>, const SIZE: usize, const M: 
     /// Allocate memory: should help for a global allocator implementation
     pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         self.0
-            .lock_mut(|refer| ProtectedAllocator::<M>(&mut refer.0).alloc(layout))
+            .lock_mut(|refer| {
+                ProtectedAllocator::<M>(&mut refer.0)
+                    .alloc(layout)
+                    .map_err(|e| e.into())
+            })
             .unwrap()
     }
     /// dellocate memory: should help for a global allocator implementation
     pub fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         self.0
             .lock_mut(|refer| {
-                ProtectedAllocator::<M>(&mut refer.0).dealloc(ptr, layout);
+                ProtectedAllocator::<M>(&mut refer.0)
+                    .dealloc(ptr, layout)
+                    .unwrap();
             })
             .unwrap();
     }
@@ -230,5 +241,14 @@ unsafe impl<X: RwMutex<&'static mut StaticChunk<SIZE, M>>, const SIZE: usize, co
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         self.deallocate(NonNull::new(ptr).unwrap(), layout);
+    }
+}
+
+#[allow(unused_variables)]
+impl const From<protected_allocator::Error> for AllocError {
+    #[inline(always)]
+    fn from(error: protected_allocator::Error) -> Self {
+        // Dump something ?
+        AllocError
     }
 }

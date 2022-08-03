@@ -7,20 +7,22 @@ use math::{round_up_2, trailing_zero_right};
 #[macro_use]
 mod macros;
 
-use core::alloc::{AllocError, Layout};
+use core::alloc::Layout;
 use core::ptr::NonNull;
 
-pub const MIN_BUDDY_SIZE: usize = 64;
-pub const MAX_BUDDY_SIZE: usize = 0x2000_0000;
-pub const MAX_SUPPORTED_ALIGN: usize = 4096;
+pub const MIN_BUDDY_SIZE: usize = 8; // arbitrary choice
+pub const MAX_SUPPORTED_ALIGN: usize = 4096; // unix standard page size
+pub const MIN_BUDDY_NB: usize = 4;
 
-const FIRST_INDEX: usize = 1;
+const FIRST_INDEX: usize = 1; // index 0 is never used
 
-// ___ Requested Buddy Size and Order with their TryFrom<_> boilerplates ___
 #[derive(Debug, Copy, Clone)]
 pub struct BuddySize<const M: usize>(pub usize);
 #[derive(Debug, Copy, Clone)]
 pub struct Order(pub u8);
+
+#[derive(Debug)]
+pub struct Error(&'static str);
 
 enum Op {
     Allocate,
@@ -30,17 +32,13 @@ enum Op {
 impl<'a, const M: usize> ProtectedAllocator<'a, M> {
     /// Initialisation, organise l'espace memoire en inscrivant les metadonnees necessaires.
     pub const fn init(&'a mut self) {
+        // ___ MAX LEN OF ADDRESS SPACE IS CONSTRAINED BY USIZE BIT SCHEME, DEPENDS OF ARCH ___
         assert!(M >= MIN_BUDDY_SIZE);
-        assert!(M <= MAX_BUDDY_SIZE);
-        assert!(round_up_2(M as u32) as usize == M);
-        assert!(self.0.len() <= MAX_BUDDY_SIZE);
-        assert!(self.0.len() >= M * 2);
-        let space_rounded_up_2 = round_up_2(self.0.len() as u32) as usize;
-        let space_order0_buddy = if space_rounded_up_2 == self.0.len() {
-            self.0.len()
-        } else {
-            space_rounded_up_2 >> 1
-        };
+        // ___ Four Buddy minimum are allowed but is not optimal at all ___
+        assert!(M <= usize::MAX / MIN_BUDDY_NB + 1);
+        assert!(self.0.len() == usize::MAX || self.0.len() >= M * MIN_BUDDY_NB);
+        assert!(self.0.len() == usize::MAX || round_up_2(self.0.len()) == self.0.len());
+        assert!(round_up_2(M) == M);
         let current_align = if self.0.len() > MAX_SUPPORTED_ALIGN {
             MAX_SUPPORTED_ALIGN
         } else {
@@ -50,7 +48,7 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
         // IMPORTANT: On compile time with const fn feature, align_offset() doesn't works
         // and returns USIZE::MAX. Trust on you. Can't be sure...
         assert!(ptr_offset == 0 || ptr_offset == usize::MAX); // Check pointer alignement
-        let max_order = Order::try_from((BuddySize::<M>(M), BuddySize(space_order0_buddy)))
+        let max_order = Order::try_from((BuddySize::<M>(M), BuddySize(self.0.len())))
             .ok()
             .expect("Woot ? Should be already checked !");
         // Bytes needed:       2^(order) * 2
@@ -87,30 +85,29 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
             .expect("Woot ? Already insuffisant memory ?!? That Buddy Allocator sucks !");
     }
     /// Alloue un nouvel objet selon le layout et retourne son addresse.
-    pub const fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        match BuddySize::try_from(layout) {
-            Ok(buddy_size) => match self.set_mark(buddy_size) {
-                Ok(non_null) => Ok(non_null),
-                // map_err(|e| ...) doesnot works in constant fn
-                Err(e) => Err(format_error(e)),
-            },
-            Err(e) => Err(format_error(e)),
-        }
+    pub const fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, Error> {
+        self.set_mark(BuddySize::try_from(layout)?)
     }
     /// Desalloue un objet prealablement alloue.
-    pub fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) {
-        match BuddySize::try_from(layout) {
-            Ok(buddy_size) => match Order::try_from((buddy_size, BuddySize::<M>(self.0.len()))) {
-                Ok(order) => self.unset_mark(order, ptr).unwrap(),
-                Err(e) => panic!("{}", e),
-            },
-            Err(e) => panic!("{}", e),
-        }
+    pub fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) -> Result<(), Error> {
+        let order = Order::try_from((BuddySize::try_from(layout)?, BuddySize::<M>(self.0.len())))?;
+        // L'arythmetique des pointeurs n'est pas possible dans une fonction constante.
+        let alloc_offset = usize::from(ptr.addr()) - (self.0.get(0).unwrap() as *const u8 as usize);
+        let start_idx = 1 << order.0;
+        // Cast as u64 to avoid mul overflow on 32bits target
+        #[cfg(target_pointer_width = "32")]
+        let index = start_idx
+            + (alloc_offset as u64 * (1 << order.0) as u64 / self.0.len() as u64) as usize;
+        // Cast as u128 to avoid mul overflow on 64bits target
+        #[cfg(target_pointer_width = "64")]
+        let index = start_idx
+            + (alloc_offset as u128 * (1 << order.0) as u128 / self.0.len() as u128) as usize;
+        self.unset_mark(order, index)
     }
-    const fn set_mark(&mut self, buddy_size: BuddySize<M>) -> Result<NonNull<[u8]>, &'static str> {
+    const fn set_mark(&mut self, buddy_size: BuddySize<M>) -> Result<NonNull<[u8]>, Error> {
         let order = Order::try_from((buddy_size, BuddySize(self.0.len())))?.0;
         if order < self.0[FIRST_INDEX] {
-            Err("Not enough room to swing a cat, a cat, the animal !")
+            Err(Error("Not enough room to swing a cat, a cat, the animal !"))
         } else {
             let (mut index, mut current_order) = (FIRST_INDEX, 0); // Begin on index 1
             while current_order < order {
@@ -137,7 +134,7 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
             let alloc_offset =
                 self.0.len() / (1 << current_order) * (index & ((1 << current_order) - 1));
             // ___ Report changes on parents ___
-            self.mark_parents(index, Order(current_order), Op::Allocate);
+            self.modify_parents(index, Order(current_order), Op::Allocate);
             Ok(NonNull::from(
                 self.0
                     .get_mut(alloc_offset..alloc_offset + buddy_size.0)
@@ -145,36 +142,30 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
             ))
         }
     }
-    fn unset_mark(&mut self, order: Order, ptr: NonNull<u8>) -> Result<(), &'static str> {
-        let alloc_offset = usize::from(ptr.addr()) - (self.0.get(0).unwrap() as *const u8 as usize);
-        let start_idx = 1 << order.0;
-        // Cast as u64 to avoid mul overflow on 32bits target
-        #[cfg(target_pointer_width = "32")]
-        let index = start_idx
-            + (alloc_offset as u64 * (1 << order.0) as u64 / self.0.len() as u64) as usize;
-        #[cfg(target_pointer_width = "64")]
-        let index = start_idx + (alloc_offset * (1 << order.0) / self.0.len());
+    const fn unset_mark(&mut self, order: Order, index: usize) -> Result<(), Error> {
         if self.0[index] & 0x80 == 0 {
-            Err("Double Free or corruption")
+            Err(Error("Double Free or corruption"))
         } else {
             // ___ Mark as free, like original value ___
             self.0[index] = order.0;
             // ___ Report changes on parents ___
-            self.mark_parents(index, order, Op::Deallocate);
+            self.modify_parents(index, order, Op::Deallocate);
             Ok(())
         }
     }
     #[inline(always)]
-    const fn mark_parents(&mut self, mut index: usize, mut order: Order, op: Op) {
+    const fn modify_parents(&mut self, mut index: usize, mut order: Order, op: Op) {
         while index > FIRST_INDEX {
             let parent = index / 2; // 1/2n --> binary heap
+            let child_left = 2 * parent;
+            let child_right = child_left + 1;
             let new_indice = match op {
-                Op::Allocate => min!(self.0[2 * parent] & 0x7f, self.0[2 * parent + 1] & 0x7f),
+                Op::Allocate => min!(self.0[child_left] & 0x7f, self.0[child_right] & 0x7f),
                 Op::Deallocate => {
-                    if self.0[2 * parent] == order.0 && self.0[2 * parent + 1] == order.0 {
+                    if self.0[child_left] == order.0 && self.0[child_right] == order.0 {
                         order.0 - 1
                     } else {
-                        min!(self.0[2 * parent] & 0x7f, self.0[2 * parent + 1] & 0x7f)
+                        min!(self.0[child_left] & 0x7f, self.0[child_right] & 0x7f)
                     }
                 }
             };
@@ -190,43 +181,53 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
 }
 
 impl<const M: usize> const TryFrom<(BuddySize<M>, BuddySize<M>)> for Order {
-    type Error = &'static str;
+    type Error = Error;
     #[inline(always)]
     fn try_from(
         (buddy_size, max_buddy_size): (BuddySize<M>, BuddySize<M>),
     ) -> Result<Self, Self::Error> {
         // ___ Assuming in RELEASE profile that buddy sizes are pow of 2 ___
-        debug_assert!(round_up_2(buddy_size.0 as u32) == buddy_size.0 as u32);
-        debug_assert!(round_up_2(max_buddy_size.0 as u32) == max_buddy_size.0 as u32);
-        let buddy_pow = trailing_zero_right(buddy_size.0 as u32);
-        let space_pow = trailing_zero_right(max_buddy_size.0 as u32);
+        debug_assert!(round_up_2(buddy_size.0) == buddy_size.0);
+        debug_assert!(
+            max_buddy_size.0 == usize::MAX || round_up_2(max_buddy_size.0) == max_buddy_size.0
+        );
+        let buddy_pow = trailing_zero_right(buddy_size.0);
+        #[cfg(target_pointer_width = "32")]
+        let space_pow = if max_buddy_size.0 == usize::MAX {
+            32
+        } else {
+            trailing_zero_right(max_buddy_size.0)
+        };
+        #[cfg(target_pointer_width = "64")]
+        let space_pow = if max_buddy_size.0 == usize::MAX {
+            64
+        } else {
+            trailing_zero_right(max_buddy_size.0)
+        };
         if buddy_pow > space_pow {
-            Err("the bigger buddy is too small for the requested size")
+            Err(Error(
+                "the bigger buddy is too small for the requested size",
+            ))
         } else {
             Ok(Order((space_pow - buddy_pow) as u8))
         }
     }
 }
 
-// TODO: Put MAX_SUPPORTED_ALIGN & MAX_BUDDY_SIZE into static string
+// TODO: Put MAX_SUPPORTED_ALIGN & ADDRESS_SPACE_MAX_LEN into static string
 impl<const M: usize> const TryFrom<Layout> for BuddySize<M> {
-    type Error = &'static str;
+    type Error = Error;
     #[inline(always)]
     fn try_from(layout: Layout) -> Result<Self, Self::Error> {
         let size = max!(layout.size(), layout.align(), M);
-        if size > MAX_BUDDY_SIZE {
-            Err("Size must be lower or eq than {MAX_BUDDY_SIZE}")
+        if size > usize::MAX / MIN_BUDDY_NB + 1 {
+            Err(Error(
+                "Size must be lower or eq than {ADDRESS_SPACE_MAX_LEN}",
+            ))
         } else if layout.align() > MAX_SUPPORTED_ALIGN {
-            Err("Alignement too big: MAX - {MAX_SUPPORTED_ALIGN}")
+            Err(Error("Alignement too big: MAX - {MAX_SUPPORTED_ALIGN}"))
         } else {
-            Ok(BuddySize(round_up_2(size as u32) as usize))
+            Ok(BuddySize(round_up_2(size)))
         }
     }
-}
-
-#[allow(unused_variables)]
-const fn format_error(e: &'static str) -> AllocError {
-    // NOTE: Problem to for using println in const FN
-    // eprintln!("{}", e);
-    AllocError
 }

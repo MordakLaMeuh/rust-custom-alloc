@@ -1,9 +1,11 @@
 mod random;
+#[cfg(not(feature = "no-std"))]
 use random::{srand_init, Rand};
 
 use super::protected_allocator::*;
 use super::*;
 
+#[cfg(not(feature = "no-std"))]
 mod allocator {
     use super::*;
     use std::sync::{Arc, Mutex};
@@ -31,15 +33,19 @@ mod allocator {
     #[test]
     fn minimal() {
         #[repr(align(4096))]
-        struct MemChunk([u8; MIN_BUDDY_SIZE * 2]);
-        let mut chunk = MemChunk([0; MIN_BUDDY_SIZE * 2]);
-        let alloc: BuddyAllocator<_, _, 64> =
+        struct MemChunk([u8; MIN_BUDDY_SIZE * MIN_BUDDY_NB]);
+        let mut chunk = MemChunk([0; MIN_BUDDY_SIZE * MIN_BUDDY_NB]);
+        let alloc: BuddyAllocator<_, _, { MIN_BUDDY_SIZE }> =
             BuddyAllocator::new(Arc::new(Mutex::new(chunk.0.as_mut_slice())));
-        let b = Box::try_new_in([0xaa_u8; 64], &alloc);
-        if let Err(_) = &b {
-            panic!("Should be done");
+        let mut v = Vec::new();
+        for _i in 0..3 {
+            let b = Box::try_new_in([0_u8; MIN_BUDDY_SIZE], &alloc);
+            if let Err(_) = &b {
+                panic!("Should be done");
+            }
+            v.push(b);
         }
-        let g = Box::try_new_in([0xbb_u8; 64], &alloc);
+        let g = Box::try_new_in([0_u8; MIN_BUDDY_SIZE], &alloc);
         if let Ok(_v) = &g {
             panic!("Should Fail");
         }
@@ -47,12 +53,18 @@ mod allocator {
     #[test]
     fn minimal_with_other_generic() {
         #[repr(align(4096))]
-        struct MemChunk([u8; MIN_BUDDY_SIZE * 4]);
-        let mut chunk = MemChunk([0; MIN_BUDDY_SIZE * 4]);
-        let alloc = BuddyAllocator::<_, _, 128>::new(Arc::new(Mutex::new(chunk.0.as_mut_slice())));
-        let b = Box::try_new_in([0xaa_u8; MIN_BUDDY_SIZE * 2], &alloc);
-        if let Err(_) = &b {
-            panic!("Should be done");
+        struct MemChunk([u8; MIN_BUDDY_SIZE * MIN_BUDDY_NB * 2]);
+        let mut chunk = MemChunk([0; MIN_BUDDY_SIZE * MIN_BUDDY_NB * 2]);
+        let alloc = BuddyAllocator::<_, _, { MIN_BUDDY_SIZE * 2 }>::new(Arc::new(Mutex::new(
+            chunk.0.as_mut_slice(),
+        )));
+        let mut v = Vec::new();
+        for _i in 0..3 {
+            let b = Box::try_new_in([0xaa_u8; MIN_BUDDY_SIZE * 2], &alloc);
+            if let Err(_) = &b {
+                panic!("Should be done");
+            }
+            v.push(b);
         }
         let g = Box::try_new_in([0xbb_u8; MIN_BUDDY_SIZE * 2], &alloc);
         if let Ok(_v) = &g {
@@ -186,7 +198,7 @@ mod buddy_convert {
             (MIN_BUDDY_SIZE * 8, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE * 8),
             (MIN_BUDDY_SIZE * 32 + 1, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE * 64),
             (MIN_BUDDY_SIZE * 257, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE * 512),
-            (MAX_BUDDY_SIZE / 2 + 1, MAX_SUPPORTED_ALIGN, MAX_BUDDY_SIZE),
+            (usize::MAX / 4 + 1, MAX_SUPPORTED_ALIGN, usize::MAX / 4 + 1),
         ]
         .into_iter()
         .for_each(|(size, align, buddy_size)| {
@@ -206,7 +218,7 @@ mod buddy_convert {
     #[test]
     fn unsuported_align_request() {
         BuddySize::<MIN_BUDDY_SIZE>::try_from(
-            Layout::from_size_align(MAX_BUDDY_SIZE, MAX_SUPPORTED_ALIGN * 2).unwrap(),
+            Layout::from_size_align(usize::MAX, MAX_SUPPORTED_ALIGN * 2).unwrap(),
         )
         .unwrap();
     }
@@ -214,7 +226,7 @@ mod buddy_convert {
     #[test]
     fn unsuported_size_request() {
         BuddySize::<MIN_BUDDY_SIZE>::try_from(
-            Layout::from_size_align(MAX_BUDDY_SIZE + 0x1000_0000, MAX_SUPPORTED_ALIGN).unwrap(),
+            Layout::from_size_align(usize::MAX - 0x1000_0000, MAX_SUPPORTED_ALIGN).unwrap(),
         )
         .unwrap();
     }
@@ -271,7 +283,7 @@ mod order_convert {
 }
 mod constructor {
     use super::*;
-    const MEMORY_FIELD_SIZE: usize = MAX_BUDDY_SIZE;
+    const MEMORY_FIELD_SIZE: usize = 0x4000_0000;
     #[repr(align(4096))]
     struct MemoryField {
         pub array: [u8; MEMORY_FIELD_SIZE],
@@ -282,7 +294,7 @@ mod constructor {
     #[test]
     fn minimal_mem_block() {
         ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
-            &mut MEMORY_FIELD.array[..MIN_BUDDY_SIZE * 2]
+            &mut MEMORY_FIELD.array[..MIN_BUDDY_SIZE * MIN_BUDDY_NB]
         })
         .init();
     }
@@ -295,7 +307,7 @@ mod constructor {
     #[test]
     fn maximal_mem_block() {
         ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
-            std::slice::from_raw_parts_mut(MEMORY_FIELD.array.as_mut_ptr(), MAX_BUDDY_SIZE)
+            std::slice::from_raw_parts_mut(MEMORY_FIELD.array.as_mut_ptr(), MEMORY_FIELD_SIZE)
         })
         .init();
     }
@@ -303,14 +315,17 @@ mod constructor {
     #[test]
     fn too_big_mem_block() {
         ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
-            std::slice::from_raw_parts_mut(MEMORY_FIELD.array.as_mut_ptr(), MAX_BUDDY_SIZE + 0x1000)
+            std::slice::from_raw_parts_mut(
+                MEMORY_FIELD.array.as_mut_ptr(),
+                MEMORY_FIELD_SIZE + 0x1000,
+            )
         })
         .init();
     }
     #[test]
     fn aligned_mem_block1() {
         ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
-            &mut MEMORY_FIELD.array[MIN_BUDDY_SIZE * 2..MIN_BUDDY_SIZE * 4]
+            &mut MEMORY_FIELD.array[MIN_BUDDY_SIZE * 20..MIN_BUDDY_SIZE * (20 + MIN_BUDDY_NB)]
         })
         .init();
     }
@@ -356,7 +371,7 @@ mod constructor {
     #[test]
     fn generic_size_changed() {
         ProtectedAllocator::<{ MIN_BUDDY_SIZE * 2 }>(unsafe {
-            &mut MEMORY_FIELD.array[..MIN_BUDDY_SIZE * 4]
+            &mut MEMORY_FIELD.array[..MIN_BUDDY_SIZE * MIN_BUDDY_NB * 2]
         })
         .init();
     }
@@ -364,7 +379,7 @@ mod constructor {
     #[test]
     fn generic_below_min_size() {
         ProtectedAllocator::<{ MIN_BUDDY_SIZE / 2 }>(unsafe {
-            &mut MEMORY_FIELD.array[..MIN_BUDDY_SIZE * 4]
+            &mut MEMORY_FIELD.array[..MIN_BUDDY_SIZE * MIN_BUDDY_NB]
         })
         .init();
     }
@@ -372,14 +387,16 @@ mod constructor {
     #[should_panic]
     #[test]
     fn generic_above_min_size() {
-        ProtectedAllocator::<MAX_BUDDY_SIZE>(unsafe { &mut MEMORY_FIELD.array[..MAX_BUDDY_SIZE] })
-            .init();
+        ProtectedAllocator::<MEMORY_FIELD_SIZE>(unsafe {
+            &mut MEMORY_FIELD.array[..MEMORY_FIELD_SIZE]
+        })
+        .init();
     }
     #[should_panic]
     #[test]
     fn generic_unaligned_min_size() {
         ProtectedAllocator::<{ MIN_BUDDY_SIZE / 2 * 3 }>(unsafe {
-            &mut MEMORY_FIELD.array[..MAX_BUDDY_SIZE]
+            &mut MEMORY_FIELD.array[..MEMORY_FIELD_SIZE]
         })
         .init();
     }
