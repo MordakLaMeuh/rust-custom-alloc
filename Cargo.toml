@@ -1,6 +1,6 @@
 [package]
 name = "night-buddy-allocator"
-version = "0.0.2-alpha"
+version = "0.0.3-alpha"
 edition = "2021"
 description = "A buddy memory allocator witch uses nightly toolchain for 32b/64b systems with no_std feature (tested on version 1.64.0-nightly)"
 license = "MIT/Apache-2.0"
