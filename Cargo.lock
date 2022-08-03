@@ -3,5 +3,5 @@
 version = 3
 
 [[package]]
-name = "buddy-allocator-nightly"
-version = "0.1.0"
+name = "night-buddy-allocator"
+version = "0.0.1-alpha"
