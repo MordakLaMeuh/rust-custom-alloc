@@ -14,7 +14,9 @@ mod allocator {
         #[repr(align(4096))]
         struct MemChunk([u8; 256]);
         let mut chunk = MemChunk([0; 256]);
-        let alloc = BuddyAllocator::<_, _, 64>::new(Arc::new(Mutex::new(chunk.0.as_mut_slice())));
+        let alloc = BuddyAllocator::new(Arc::new(Mutex::new(AddressSpace::<64>(
+            chunk.0.as_mut_slice(),
+        ))));
 
         let mut v = Vec::new();
         for _ in 0..3 {
@@ -35,8 +37,9 @@ mod allocator {
         #[repr(align(4096))]
         struct MemChunk([u8; MIN_BUDDY_SIZE * MIN_BUDDY_NB]);
         let mut chunk = MemChunk([0; MIN_BUDDY_SIZE * MIN_BUDDY_NB]);
-        let alloc: BuddyAllocator<_, _, { MIN_BUDDY_SIZE }> =
-            BuddyAllocator::new(Arc::new(Mutex::new(chunk.0.as_mut_slice())));
+        let alloc = BuddyAllocator::new(Arc::new(Mutex::new(AddressSpace::<MIN_BUDDY_SIZE>(
+            chunk.0.as_mut_slice(),
+        ))));
         let mut v = Vec::new();
         for _i in 0..3 {
             let b = Box::try_new_in([0_u8; MIN_BUDDY_SIZE], &alloc);
@@ -55,8 +58,8 @@ mod allocator {
         #[repr(align(4096))]
         struct MemChunk([u8; MIN_BUDDY_SIZE * MIN_BUDDY_NB * 2]);
         let mut chunk = MemChunk([0; MIN_BUDDY_SIZE * MIN_BUDDY_NB * 2]);
-        let alloc = BuddyAllocator::<_, _, { MIN_BUDDY_SIZE * 2 }>::new(Arc::new(Mutex::new(
-            chunk.0.as_mut_slice(),
+        let alloc = BuddyAllocator::new(Arc::new(Mutex::new(
+            AddressSpace::<{ MIN_BUDDY_SIZE * 2 }>(chunk.0.as_mut_slice()),
         )));
         let mut v = Vec::new();
         for _i in 0..3 {
@@ -129,8 +132,9 @@ mod allocator {
     fn memory_sodomizer() {
         srand_init(10);
         for _ in 0..4 {
-            let alloc: BuddyAllocator<_, _, 64> =
-                BuddyAllocator::new(Arc::new(Mutex::new(unsafe { CHUNK.0.as_mut_slice() })));
+            let alloc = BuddyAllocator::new(Arc::new(Mutex::new(AddressSpace::<64>(unsafe {
+                CHUNK.0.as_mut_slice()
+            }))));
             repeat_test(&alloc);
             final_test(&alloc);
         }
@@ -145,8 +149,7 @@ mod allocator {
         // the object will continue to live.
         let refer = &mut aligned_memory[0].0;
         let refer_static = unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(refer) };
-        let alloc: BuddyAllocator<_, _, 64> =
-            BuddyAllocator::new(Arc::new(Mutex::new(refer_static)));
+        let alloc = BuddyAllocator::new(Arc::new(Mutex::new(AddressSpace::<64>(refer_static))));
         let mut thread_list = Vec::new();
         for _ in 0..4 {
             let clone = alloc.clone();
@@ -160,12 +163,11 @@ mod allocator {
         final_test(&alloc);
     }
     const MIN_CELL_LEN: usize = 64;
-    static mut MEMORY_FIELD: StaticChunk<CHUNK_SIZE, MIN_CELL_LEN> = create_static_chunk();
     static STATIC_ALLOC: StaticBuddyAllocator<
-        Mutex<&mut StaticChunk<CHUNK_SIZE, MIN_CELL_LEN>>,
+        Mutex<StaticAddressSpace<CHUNK_SIZE, MIN_CELL_LEN>>,
         CHUNK_SIZE,
         MIN_CELL_LEN,
-    > = StaticBuddyAllocator::attach_static_chunk(Mutex::new(unsafe { &mut MEMORY_FIELD }));
+    > = StaticBuddyAllocator::new(Mutex::new(StaticAddressSpace::new()));
     #[test]
     fn memory_sodomizer_multithreaded_with_static() {
         srand_init(42);
