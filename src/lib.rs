@@ -35,74 +35,62 @@ use std::alloc::handle_alloc_error;
 pub use mutex::RwMutex;
 
 pub use protected_allocator::BuddyError;
-pub use protected_allocator::ProtectedAllocator;
-use protected_allocator::{static_attach, static_init};
+pub use protected_allocator::{AddressSpaceRef, ProtectedAllocator, StaticAddressSpace};
 pub use protected_allocator::{MAX_SUPPORTED_ALIGN, MIN_BUDDY_NB, MIN_CELL_LEN};
 
 /// Buddy Allocator
 #[repr(C, align(16))]
 pub struct BuddyAllocator<
     'a,
-    T: Deref<Target = X> + Send + Sync + Clone,
+    T: Deref<Target = StaticBuddyAllocator<'a, X, M>> + Send + Sync + Clone,
     X: RwMutex<ProtectedAllocator<'a, M>> + Send + Sync,
     const M: usize,
 > {
-    protected_allocator: T,
-    error_hook: Option<fn(BuddyError) -> ()>,
-    phantom: PhantomData<&'a T>,
+    static_allocator: T,
+    phantom: PhantomData<&'a X>,
 }
 
 impl<'a, T, X, const M: usize> BuddyAllocator<'a, T, X, M>
 where
-    T: Deref<Target = X> + Send + Sync + Clone,
+    T: Deref<Target = StaticBuddyAllocator<'a, X, M>> + Send + Sync + Clone,
     X: RwMutex<ProtectedAllocator<'a, M>> + Send + Sync,
 {
     /// Create a new Buddy Allocator
-    pub fn new(protected_allocator: T, error_hook: Option<fn(BuddyError)>) -> Self {
+    pub fn new(static_allocator: T) -> Self {
         Self {
-            protected_allocator,
-            error_hook,
+            static_allocator,
             phantom: PhantomData,
         }
     }
     /// Allocate memory: should help for a global allocator implementation
     #[inline(always)]
     pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, BuddyError> {
-        self.protected_allocator
-            .lock_mut(|allocator| allocator.alloc(layout))
-            .unwrap()
+        self.static_allocator.allocate(layout)
     }
     /// Deallocate memory: should help for a global allocator implementation
     #[inline(always)]
     pub fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) -> Result<(), BuddyError> {
-        self.protected_allocator
-            .lock_mut(|allocator| allocator.dealloc(ptr, layout))
-            .unwrap()
+        self.static_allocator.deallocate(ptr, layout)
     }
-    // fn reserve(&self, index: usize, size: usize) -> Result<(), BuddyError> {
-    //     unimplemented!();
-    // }
-    // fn unreserve(&self, index: usize) -> Result<(), BuddyError> {
-    //     unimplemented!();
-    // }
-    /// Set the error hook.
-    /// it is better to declare it at the start because using this method implies
-    /// that the allocator must be declared as mutable.
-    pub fn set_error_hook(&mut self, c: fn(BuddyError)) {
-        self.error_hook = Some(c);
+    /// TODO
+    pub fn reserve(&self, index: usize, size: usize) -> Result<(), BuddyError> {
+        self.static_allocator.reserve(index, size)
+    }
+    /// TODO
+    pub fn unreserve(&self, index: usize) -> Result<(), BuddyError> {
+        self.static_allocator.unreserve(index)
     }
 }
 
 /// Clone Boilerplate for BuddyAllocator<'a, T, X, M>... - Cannot Derive Naturaly
 impl<'a, T, X, const M: usize> Clone for BuddyAllocator<'a, T, X, M>
 where
-    T: Deref<Target = X> + Send + Sync + Clone,
+    T: Deref<Target = StaticBuddyAllocator<'a, X, M>> + Send + Sync + Clone,
     X: RwMutex<ProtectedAllocator<'a, M>> + Send + Sync,
 {
     fn clone(&self) -> Self {
         Self {
-            protected_allocator: self.protected_allocator.clone(),
-            error_hook: self.error_hook.clone(),
+            static_allocator: self.static_allocator.clone(),
             phantom: PhantomData,
         }
     }
@@ -110,126 +98,93 @@ where
 
 unsafe impl<'a, T, X, const M: usize> Allocator for BuddyAllocator<'a, T, X, M>
 where
-    T: Deref<Target = X> + Send + Sync + Clone,
+    T: Deref<Target = StaticBuddyAllocator<'a, X, M>> + Send + Sync + Clone,
     X: RwMutex<ProtectedAllocator<'a, M>> + Send + Sync,
 {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.allocate(layout).map_err(|e| {
-            if let Some(error_hook) = self.error_hook {
-                error_hook(e);
-            }
-            e.into()
-        })
+        self.allocate(layout).map_err(|e| e.into())
     }
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        self.deallocate(ptr, layout)
-            .map_err(|e| {
-                if let Some(error_hook) = self.error_hook {
-                    error_hook(e);
-                }
-                e
-            })
-            .unwrap();
+        self.deallocate(ptr, layout).unwrap();
     }
 }
 
 /// Static Buddy Allocator
 #[repr(C, align(16))]
-pub struct StaticBuddyAllocator<
-    X: RwMutex<StaticAddressSpace<SIZE, M>>,
-    const SIZE: usize,
-    const M: usize,
-> {
+pub struct StaticBuddyAllocator<'a, X, const M: usize>
+where
+    X: RwMutex<ProtectedAllocator<'a, M>>,
+{
     data: X,
     error_hook: Option<fn(BuddyError) -> ()>,
+    phantom: PhantomData<&'a X>,
 }
 
-/// Use only for static allocation
-#[repr(align(4096))]
-pub struct StaticAddressSpace<const SIZE: usize, const M: usize>(pub [u8; SIZE]);
-
-impl<const SIZE: usize, const M: usize> StaticAddressSpace<SIZE, M> {
-    /// Helper to create static const address space for allocations
-    /// Be carefull, static chunks affect hugely the executable's size
-    pub const fn new() -> Self {
-        let mut area: [u8; SIZE] = [0; SIZE];
-        static_init::<M>(&mut area);
-        StaticAddressSpace(area)
-    }
-}
-
-impl<X, const SIZE: usize, const M: usize> StaticBuddyAllocator<X, SIZE, M>
+impl<'a, X, const M: usize> StaticBuddyAllocator<'a, X, M>
 where
-    X: RwMutex<StaticAddressSpace<SIZE, M>>,
+    X: RwMutex<ProtectedAllocator<'a, M>>,
 {
     /// Attach a previously allocated chunk generated by create_static_memory_area()
     pub const fn new(mutex_of_static_address_space: X, error_hook: Option<fn(BuddyError)>) -> Self {
         Self {
             data: mutex_of_static_address_space,
             error_hook,
+            phantom: PhantomData,
         }
     }
     /// Allocate memory: should help for a global allocator implementation
     pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, BuddyError> {
         self.data
-            .lock_mut(|refer| static_attach::<M>(&mut refer.0).alloc(layout))
+            .lock_mut(|r| r.alloc(layout).map_err(|e| self.check(e)))
             .unwrap()
     }
     /// dellocate memory: should help for a global allocator implementation
     pub fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) -> Result<(), BuddyError> {
         self.data
-            .lock_mut(|refer| static_attach::<M>(&mut refer.0).dealloc(ptr, layout))
+            .lock_mut(|r| r.dealloc(ptr, layout).map_err(|e| self.check(e)))
             .unwrap()
     }
-    // fn reserve(&self, index: usize, size: usize) -> Result<(), BuddyError> {
-    //     unimplemented!();
-    // }
-    // fn unreserve(&self, index: usize) -> Result<(), BuddyError> {
-    //     unimplemented!();
-    // }
-    /// Set the error hook.
-    /// it is better to declare it at the start because using this method implies
-    /// that the allocator must be declared as mutable.
-    pub fn set_error_hook(&mut self, c: fn(BuddyError)) {
-        self.error_hook = Some(c);
+    /// TODO
+    pub fn reserve(&self, index: usize, size: usize) -> Result<(), BuddyError> {
+        self.data
+            .lock_mut(|r| r.reserve(index, size).map_err(|e| self.check(e)))
+            .unwrap()
+    }
+    /// TODO
+    pub fn unreserve(&self, index: usize) -> Result<(), BuddyError> {
+        self.data
+            .lock_mut(|r| r.unreserve(index).map_err(|e| self.check(e)))
+            .unwrap()
+    }
+    #[inline(always)]
+    fn check(&self, error: BuddyError) -> BuddyError {
+        if let Some(error_hook) = self.error_hook {
+            error_hook(error);
+        }
+        error
     }
 }
 
-unsafe impl<X, const SIZE: usize, const M: usize> Allocator for StaticBuddyAllocator<X, SIZE, M>
+unsafe impl<'a, X, const M: usize> Allocator for StaticBuddyAllocator<'a, X, M>
 where
-    X: RwMutex<StaticAddressSpace<SIZE, M>>,
+    X: RwMutex<ProtectedAllocator<'a, M>>,
 {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.allocate(layout).map_err(|e| {
-            if let Some(error_hook) = self.error_hook {
-                error_hook(e);
-            }
-            e.into()
-        })
+        self.allocate(layout).map_err(|e| e.into())
     }
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        self.deallocate(ptr, layout)
-            .map_err(|e| {
-                if let Some(error_hook) = self.error_hook {
-                    error_hook(e);
-                }
-                e
-            })
-            .unwrap()
+        self.deallocate(ptr, layout).unwrap();
     }
 }
 
-unsafe impl<X, const SIZE: usize, const M: usize> GlobalAlloc for StaticBuddyAllocator<X, SIZE, M>
+unsafe impl<'a, X, const M: usize> GlobalAlloc for StaticBuddyAllocator<'a, X, M>
 where
-    X: RwMutex<StaticAddressSpace<SIZE, M>>,
+    X: RwMutex<ProtectedAllocator<'a, M>>,
 {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         match self.allocate(layout) {
             Ok(non_null) => non_null.as_mut_ptr(),
-            Err(e) => {
-                if let Some(error_hook) = self.error_hook {
-                    error_hook(e);
-                }
+            Err(_e) => {
                 #[cfg(not(feature = "no-std"))]
                 handle_alloc_error(layout);
                 #[cfg(feature = "no-std")]
@@ -238,14 +193,7 @@ where
         }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        self.deallocate(NonNull::new(ptr).unwrap(), layout)
-            .map_err(|e| {
-                if let Some(error_hook) = self.error_hook {
-                    error_hook(e);
-                }
-                e
-            })
-            .unwrap();
+        self.deallocate(NonNull::new(ptr).unwrap(), layout).unwrap();
     }
 }
 
