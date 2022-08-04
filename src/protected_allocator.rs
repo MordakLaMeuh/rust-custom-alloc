@@ -1,7 +1,8 @@
 mod math;
-use math::{round_up_2, trailing_zero_right};
 #[macro_use]
 mod macros;
+
+use math::{round_up_2, trailing_zero_right};
 
 use core::alloc::Layout;
 use core::ptr::NonNull;
@@ -22,9 +23,6 @@ pub struct ProtectedAllocator<'a, const M: usize>(pub &'a mut [u8]);
 pub struct BuddySize<const M: usize>(pub usize);
 #[derive(Debug, Copy, Clone)]
 pub struct Order(pub u8);
-
-#[derive(Debug)]
-pub struct Error(&'static str);
 
 enum Op {
     Allocate,
@@ -87,11 +85,11 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
             .expect("Woot ? Already insuffisant memory ?!? That Buddy Allocator sucks !");
     }
     /// Alloue un nouvel objet selon le layout et retourne son addresse.
-    pub const fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, Error> {
+    pub const fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, BuddyError> {
         self.set_mark(BuddySize::try_from(layout)?)
     }
     /// Desalloue un objet prealablement alloue.
-    pub fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) -> Result<(), Error> {
+    pub fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) -> Result<(), BuddyError> {
         let order = Order::try_from((BuddySize::try_from(layout)?, BuddySize::<M>(self.0.len())))?;
         // L'arythmetique des pointeurs n'est pas possible dans une fonction constante.
         let alloc_offset = usize::from(ptr.addr()) - (self.0.get(0).unwrap() as *const u8 as usize);
@@ -106,10 +104,10 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
             + (alloc_offset as u128 * (1 << order.0) as u128 / self.0.len() as u128) as usize;
         self.unset_mark(order, index)
     }
-    const fn set_mark(&mut self, buddy_size: BuddySize<M>) -> Result<NonNull<[u8]>, Error> {
+    const fn set_mark(&mut self, buddy_size: BuddySize<M>) -> Result<NonNull<[u8]>, BuddyError> {
         let order = Order::try_from((buddy_size, BuddySize(self.0.len())))?.0;
         if order < self.0[FIRST_INDEX] {
-            Err(Error("Not enough room to swing a cat, a cat, the animal !"))
+            Err(BuddyError::NoMoreSpace)
         } else {
             let (mut index, mut current_order) = (FIRST_INDEX, 0); // Begin on index 1
             while current_order < order {
@@ -144,9 +142,9 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
             ))
         }
     }
-    const fn unset_mark(&mut self, order: Order, index: usize) -> Result<(), Error> {
+    const fn unset_mark(&mut self, order: Order, index: usize) -> Result<(), BuddyError> {
         if self.0[index] & 0x80 == 0 {
-            Err(Error("Double Free or corruption"))
+            Err(BuddyError::DoubleFreeOrCorruption)
         } else {
             // ___ Mark as free, like original value ___
             self.0[index] = order.0;
@@ -183,7 +181,7 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
 }
 
 impl<const M: usize> const TryFrom<(BuddySize<M>, BuddySize<M>)> for Order {
-    type Error = Error;
+    type Error = BuddyError;
     #[inline(always)]
     fn try_from(
         (buddy_size, max_buddy_size): (BuddySize<M>, BuddySize<M>),
@@ -207,9 +205,7 @@ impl<const M: usize> const TryFrom<(BuddySize<M>, BuddySize<M>)> for Order {
             trailing_zero_right(max_buddy_size.0)
         };
         if buddy_pow > space_pow {
-            Err(Error(
-                "the bigger buddy is too small for the requested size",
-            ))
+            Err(BuddyError::CannotFit)
         } else {
             Ok(Order((space_pow - buddy_pow) as u8))
         }
@@ -217,16 +213,44 @@ impl<const M: usize> const TryFrom<(BuddySize<M>, BuddySize<M>)> for Order {
 }
 
 impl<const M: usize> const TryFrom<Layout> for BuddySize<M> {
-    type Error = Error;
+    type Error = BuddyError;
     #[inline(always)]
     fn try_from(layout: Layout) -> Result<Self, Self::Error> {
         let size = max!(layout.size(), layout.align(), M);
         if size > usize::MAX / MIN_BUDDY_NB + 1 {
-            Err(Error("Bad size"))
+            Err(BuddyError::TooBigSize)
         } else if layout.align() > MAX_SUPPORTED_ALIGN {
-            Err(Error("Alignement too big"))
+            Err(BuddyError::TooBigAlignment)
         } else {
             Ok(BuddySize(round_up_2(size)))
+        }
+    }
+}
+
+/// Error types from Allocator
+#[derive(Debug, Copy, Clone)]
+pub enum BuddyError {
+    /// Requested size cannot be allocated                                
+    CannotFit,
+    /// Alignment issue
+    TooBigAlignment,
+    /// Requested size cannot be allocated
+    TooBigSize,
+    /// Attempt to free when is impossible
+    DoubleFreeOrCorruption,
+    /// No more allocable space for requested size
+    NoMoreSpace,
+}
+
+impl const From<BuddyError> for &'static str {
+    fn from(error: BuddyError) -> Self {
+        use BuddyError::*;
+        match error {
+            CannotFit => "the bigger buddy is too small for the requested size",
+            TooBigAlignment => "Alignement too big",
+            TooBigSize => "Bad size",
+            DoubleFreeOrCorruption => "Double Free or corruption",
+            NoMoreSpace => "Not enough room to swing a cat, a cat, the animal !",
         }
     }
 }

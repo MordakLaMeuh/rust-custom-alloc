@@ -132,9 +132,12 @@ mod allocator {
     fn memory_sodomizer() {
         srand_init(10);
         for _ in 0..4 {
-            let alloc = BuddyAllocator::new(Arc::new(Mutex::new(AddressSpace::<64>(unsafe {
+            let mut alloc = BuddyAllocator::new(Arc::new(Mutex::new(AddressSpace::<64>(unsafe {
                 CHUNK.0.as_mut_slice()
             }))));
+            alloc.set_error_hook(|error| {
+                dbg!(error);
+            });
             repeat_test(&alloc);
             final_test(&alloc);
         }
@@ -149,7 +152,10 @@ mod allocator {
         // the object will continue to live.
         let refer = &mut aligned_memory[0].0;
         let refer_static = unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(refer) };
-        let alloc = BuddyAllocator::new(Arc::new(Mutex::new(AddressSpace::<64>(refer_static))));
+        let mut alloc = BuddyAllocator::new(Arc::new(Mutex::new(AddressSpace::<64>(refer_static))));
+        alloc.set_error_hook(|error| {
+            dbg!(error);
+        });
         let mut thread_list = Vec::new();
         for _ in 0..4 {
             let clone = alloc.clone();
@@ -163,7 +169,7 @@ mod allocator {
         final_test(&alloc);
     }
     const MIN_CELL_LEN: usize = 64;
-    static STATIC_ALLOC: StaticBuddyAllocator<
+    static mut STATIC_ALLOC: StaticBuddyAllocator<
         Mutex<StaticAddressSpace<CHUNK_SIZE, MIN_CELL_LEN>>,
         CHUNK_SIZE,
         MIN_CELL_LEN,
@@ -171,16 +177,21 @@ mod allocator {
     #[test]
     fn memory_sodomizer_multithreaded_with_static() {
         srand_init(42);
+        unsafe {
+            STATIC_ALLOC.set_error_hook(|e| {
+                dbg!(e);
+            });
+        }
         let mut thread_list = Vec::new();
         for _ in 0..4 {
             thread_list.push(std::thread::spawn(move || {
-                repeat_test(&STATIC_ALLOC);
+                repeat_test(unsafe { &STATIC_ALLOC });
             }));
         }
         for thread in thread_list.into_iter() {
             drop(thread.join());
         }
-        final_test(&STATIC_ALLOC);
+        final_test(unsafe { &STATIC_ALLOC });
     }
 }
 mod buddy_convert {
