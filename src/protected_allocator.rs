@@ -17,7 +17,7 @@ pub const MIN_BUDDY_NB: usize = 4; // arbitrary choice
 const FIRST_INDEX: usize = 1; // index 0 is never used
 
 /// Inner part of BuddyAllocator and StaticBuddyAllocator
-pub struct ProtectedAllocator<'a, const M: usize>(pub &'a mut [u8]);
+pub struct ProtectedAllocator<'a, const M: usize>(&'a mut [u8]);
 
 #[derive(Debug, Copy, Clone)]
 pub struct BuddySize<const M: usize>(pub usize);
@@ -31,24 +31,24 @@ enum Op {
 
 impl<'a, const M: usize> ProtectedAllocator<'a, M> {
     /// Initialisation, organise l'espace memoire en inscrivant les metadonnees necessaires.
-    pub const fn init(&'a mut self) {
+    pub const fn new(address: &'a mut [u8]) -> Self {
         // ___ MAX LEN OF ADDRESS SPACE IS CONSTRAINED BY USIZE BIT SCHEME, DEPENDS OF ARCH ___
         assert!(M >= MIN_CELL_LEN);
         // ___ Four Buddy minimum are allowed but is not optimal at all ___
         assert!(M <= usize::MAX / MIN_BUDDY_NB + 1);
-        assert!(self.0.len() == usize::MAX || self.0.len() >= M * MIN_BUDDY_NB);
-        assert!(self.0.len() == usize::MAX || round_up_2(self.0.len()) == self.0.len());
+        assert!(address.len() == usize::MAX || address.len() >= M * MIN_BUDDY_NB);
+        assert!(address.len() == usize::MAX || round_up_2(address.len()) == address.len());
         assert!(round_up_2(M) == M);
-        let current_align = if self.0.len() > MAX_SUPPORTED_ALIGN {
+        let current_align = if address.len() > MAX_SUPPORTED_ALIGN {
             MAX_SUPPORTED_ALIGN
         } else {
-            self.0.len()
+            address.len()
         };
-        let ptr_offset = self.0.as_mut_ptr().align_offset(current_align);
+        let ptr_offset = address.as_mut_ptr().align_offset(current_align);
         // IMPORTANT: On compile time with const fn feature, align_offset() doesn't works
         // and returns USIZE::MAX. Trust on you. Can't be sure...
         assert!(ptr_offset == 0 || ptr_offset == usize::MAX); // Check pointer alignement
-        let max_order = Order::try_from((BuddySize::<M>(M), BuddySize(self.0.len())))
+        let max_order = Order::try_from((BuddySize::<M>(M), BuddySize(address.len())))
             .ok()
             .expect("Woot ? Should be already checked !");
         // Bytes needed:       2^(order) * 2
@@ -66,7 +66,7 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
         let (mut current_order, mut members, mut index) = (0, 2, 0);
         while index < bytes_needed {
             members -= 1;
-            self.0[index] = current_order;
+            address[index] = current_order;
             if members == 0 {
                 current_order += 1;
                 members = 1 << current_order;
@@ -75,7 +75,8 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
         }
         // ___ Bootstrap memory for metadata ___
         let metadata_chunk_size = max!(bytes_needed, M);
-        let _r = self
+        let mut this = Self(address);
+        let _r = this
             .alloc(
                 Layout::from_size_align(metadata_chunk_size, M)
                     .ok()
@@ -83,6 +84,7 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
             )
             .ok()
             .expect("Woot ? Already insuffisant memory ?!? That Buddy Allocator sucks !");
+        this
     }
     /// Alloue un nouvel objet selon le layout et retourne son addresse.
     pub const fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, BuddyError> {
@@ -178,6 +180,28 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
             index = parent;
         }
     }
+    // Static Init: NOTE Private method, used only by StaticBuddyAllocator.
+    #[inline(always)]
+    const fn static_init(address: &'a mut [u8]) {
+        let _r = Self::new(address);
+    }
+    // Static Attach: NOTE Private method, used only by StaticBuddyAllocator.
+    #[inline(always)]
+    const fn static_attach(address: &'a mut [u8]) -> Self {
+        Self(address)
+    }
+}
+
+/// Function needed because of the lack of the protected keyword in Rust.
+#[inline(always)]
+pub const fn static_init<const M: usize>(address: &mut [u8]) {
+    ProtectedAllocator::<M>::static_init(address);
+}
+
+/// Function needed because of the lack of the protected keyword in Rust.
+#[inline(always)]
+pub const fn static_attach<const M: usize>(address: &mut [u8]) -> ProtectedAllocator<M> {
+    ProtectedAllocator::static_attach(address)
 }
 
 impl<const M: usize> const TryFrom<(BuddySize<M>, BuddySize<M>)> for Order {

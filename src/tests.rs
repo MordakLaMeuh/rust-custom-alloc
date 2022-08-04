@@ -15,7 +15,9 @@ mod allocator {
         struct MemChunk([u8; 256]);
         let mut chunk = MemChunk([0; 256]);
         let alloc = BuddyAllocator::new(
-            Arc::new(Mutex::new(AddressSpace::<64>(chunk.0.as_mut_slice()))),
+            Arc::new(Mutex::new(ProtectedAllocator::<64>::new(
+                chunk.0.as_mut_slice(),
+            ))),
             None,
         );
 
@@ -39,7 +41,7 @@ mod allocator {
         struct MemChunk([u8; MIN_CELL_LEN * MIN_BUDDY_NB]);
         let mut chunk = MemChunk([0; MIN_CELL_LEN * MIN_BUDDY_NB]);
         let alloc = BuddyAllocator::new(
-            Arc::new(Mutex::new(AddressSpace::<MIN_CELL_LEN>(
+            Arc::new(Mutex::new(ProtectedAllocator::<MIN_CELL_LEN>::new(
                 chunk.0.as_mut_slice(),
             ))),
             None,
@@ -63,7 +65,7 @@ mod allocator {
         struct MemChunk([u8; MIN_CELL_LEN * MIN_BUDDY_NB * 2]);
         let mut chunk = MemChunk([0; MIN_CELL_LEN * MIN_BUDDY_NB * 2]);
         let alloc = BuddyAllocator::new(
-            Arc::new(Mutex::new(AddressSpace::<{ MIN_CELL_LEN * 2 }>(
+            Arc::new(Mutex::new(ProtectedAllocator::<{ MIN_CELL_LEN * 2 }>::new(
                 chunk.0.as_mut_slice(),
             ))),
             None,
@@ -140,7 +142,7 @@ mod allocator {
         srand_init(10);
         for _ in 0..4 {
             let alloc = BuddyAllocator::new(
-                Arc::new(Mutex::new(AddressSpace::<64>(unsafe {
+                Arc::new(Mutex::new(ProtectedAllocator::<64>::new(unsafe {
                     CHUNK.0.as_mut_slice()
                 }))),
                 Some(|e| {
@@ -162,7 +164,7 @@ mod allocator {
         let refer = &mut aligned_memory[0].0;
         let refer_static = unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(refer) };
         let alloc = BuddyAllocator::new(
-            Arc::new(Mutex::new(AddressSpace::<64>(refer_static))),
+            Arc::new(Mutex::new(ProtectedAllocator::<64>::new(refer_static))),
             Some(|e| {
                 dbg!(e);
             }),
@@ -317,111 +319,93 @@ mod constructor {
     };
     #[test]
     fn minimal_mem_block() {
-        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
+        static_init::<MIN_CELL_LEN>(unsafe {
             &mut MEMORY_FIELD.array[..MIN_CELL_LEN * MIN_BUDDY_NB]
-        })
-        .init();
+        });
     }
     #[should_panic]
     #[test]
     fn too_small_mem_block() {
-        ProtectedAllocator::<MIN_CELL_LEN>(unsafe { &mut MEMORY_FIELD.array[..MIN_CELL_LEN] })
-            .init();
+        static_init::<MIN_CELL_LEN>(unsafe { &mut MEMORY_FIELD.array[..MIN_CELL_LEN] });
     }
     #[test]
     fn maximal_mem_block() {
-        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
+        static_init::<MIN_CELL_LEN>(unsafe {
             std::slice::from_raw_parts_mut(MEMORY_FIELD.array.as_mut_ptr(), MEMORY_FIELD_SIZE)
-        })
-        .init();
+        });
     }
     #[should_panic]
     #[test]
     fn too_big_mem_block() {
-        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
+        static_init::<MIN_CELL_LEN>(unsafe {
             std::slice::from_raw_parts_mut(
                 MEMORY_FIELD.array.as_mut_ptr(),
                 MEMORY_FIELD_SIZE + 0x1000,
             )
-        })
-        .init();
+        });
     }
     #[test]
     fn aligned_mem_block1() {
-        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
+        static_init::<MIN_CELL_LEN>(unsafe {
             &mut MEMORY_FIELD.array[MIN_CELL_LEN * 20..MIN_CELL_LEN * (20 + MIN_BUDDY_NB)]
-        })
-        .init();
+        });
     }
     #[should_panic]
     #[test]
     fn bad_aligned_mem_block1() {
-        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
-            &mut MEMORY_FIELD.array[4..MIN_CELL_LEN * 2 + 4]
-        })
-        .init();
+        static_init::<MIN_CELL_LEN>(unsafe { &mut MEMORY_FIELD.array[4..MIN_CELL_LEN * 2 + 4] });
     }
     #[test]
     fn aligned_mem_block2() {
-        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
+        static_init::<MIN_CELL_LEN>(unsafe {
             &mut MEMORY_FIELD.array[MIN_CELL_LEN * 8..MIN_CELL_LEN * 16]
-        })
-        .init();
+        });
     }
     #[should_panic]
     #[test]
     fn bad_aligned_mem_block2() {
-        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
+        static_init::<MIN_CELL_LEN>(unsafe {
             &mut MEMORY_FIELD.array[MIN_CELL_LEN * 9..MIN_CELL_LEN * 17]
-        })
-        .init();
+        });
     }
     #[test]
     fn aligned_mem_block3() {
-        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
+        static_init::<MIN_CELL_LEN>(unsafe {
             &mut MEMORY_FIELD.array[MAX_SUPPORTED_ALIGN..MAX_SUPPORTED_ALIGN * 17]
-        })
-        .init();
+        });
     }
     #[should_panic]
     #[test]
     fn bad_aligned_mem_block3() {
-        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
+        static_init::<MIN_CELL_LEN>(unsafe {
             &mut MEMORY_FIELD.array
                 [(MAX_SUPPORTED_ALIGN / 2)..(MAX_SUPPORTED_ALIGN * 16) + (MAX_SUPPORTED_ALIGN / 2)]
-        })
-        .init();
+        });
     }
     #[test]
     fn generic_size_changed() {
-        ProtectedAllocator::<{ MIN_CELL_LEN * 2 }>(unsafe {
+        static_init::<{ MIN_CELL_LEN * 2 }>(unsafe {
             &mut MEMORY_FIELD.array[..MIN_CELL_LEN * MIN_BUDDY_NB * 2]
-        })
-        .init();
+        });
     }
     #[should_panic]
     #[test]
     fn generic_below_min_size() {
-        ProtectedAllocator::<{ MIN_CELL_LEN / 2 }>(unsafe {
+        static_init::<{ MIN_CELL_LEN / 2 }>(unsafe {
             &mut MEMORY_FIELD.array[..MIN_CELL_LEN * MIN_BUDDY_NB]
-        })
-        .init();
+        });
     }
 
     #[should_panic]
     #[test]
     fn generic_above_min_size() {
-        ProtectedAllocator::<MEMORY_FIELD_SIZE>(unsafe {
-            &mut MEMORY_FIELD.array[..MEMORY_FIELD_SIZE]
-        })
-        .init();
+        static_init::<MEMORY_FIELD_SIZE>(unsafe { &mut MEMORY_FIELD.array[..MEMORY_FIELD_SIZE] });
     }
     #[should_panic]
     #[test]
     fn generic_unaligned_min_size() {
-        ProtectedAllocator::<{ MIN_CELL_LEN / 2 * 3 }>(unsafe {
+        static_init::<{ MIN_CELL_LEN / 2 * 3 }>(unsafe {
             &mut MEMORY_FIELD.array[..MEMORY_FIELD_SIZE]
-        })
-        .init();
+        });
     }
 }

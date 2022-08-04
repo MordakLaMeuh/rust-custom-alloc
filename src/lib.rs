@@ -36,27 +36,18 @@ pub use mutex::RwMutex;
 
 pub use protected_allocator::BuddyError;
 pub use protected_allocator::ProtectedAllocator;
+use protected_allocator::{static_attach, static_init};
 pub use protected_allocator::{MAX_SUPPORTED_ALIGN, MIN_BUDDY_NB, MIN_CELL_LEN};
-
-impl<'a, const M: usize> AddressSpace<'a, M> {
-    /// Create a new Address Space
-    pub fn new(refer: &'a mut [u8]) -> Self {
-        Self(refer)
-    }
-}
-
-///Wrapper for &mut \[[u8]\] witch contains generics declarations
-pub struct AddressSpace<'a, const M: usize>(pub &'a mut [u8]);
 
 /// Buddy Allocator
 #[repr(C, align(16))]
 pub struct BuddyAllocator<
     'a,
     T: Deref<Target = X> + Send + Sync + Clone,
-    X: RwMutex<AddressSpace<'a, M>> + Send + Sync,
+    X: RwMutex<ProtectedAllocator<'a, M>> + Send + Sync,
     const M: usize,
 > {
-    data: T,
+    protected_allocator: T,
     error_hook: Option<fn(BuddyError) -> ()>,
     phantom: PhantomData<&'a T>,
 }
@@ -64,17 +55,12 @@ pub struct BuddyAllocator<
 impl<'a, T, X, const M: usize> BuddyAllocator<'a, T, X, M>
 where
     T: Deref<Target = X> + Send + Sync + Clone,
-    X: RwMutex<AddressSpace<'a, M>> + Send + Sync,
+    X: RwMutex<ProtectedAllocator<'a, M>> + Send + Sync,
 {
     /// Create a new Buddy Allocator
-    pub fn new(content: T, error_hook: Option<fn(BuddyError)>) -> Self {
-        content
-            .lock_mut(|refer| {
-                ProtectedAllocator::<M>(refer.0).init();
-            })
-            .unwrap();
+    pub fn new(protected_allocator: T, error_hook: Option<fn(BuddyError)>) -> Self {
         Self {
-            data: content,
+            protected_allocator,
             error_hook,
             phantom: PhantomData,
         }
@@ -82,15 +68,15 @@ where
     /// Allocate memory: should help for a global allocator implementation
     #[inline(always)]
     pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, BuddyError> {
-        self.data
-            .lock_mut(|refer| ProtectedAllocator::<M>(refer.0).alloc(layout))
+        self.protected_allocator
+            .lock_mut(|allocator| allocator.alloc(layout))
             .unwrap()
     }
     /// Deallocate memory: should help for a global allocator implementation
     #[inline(always)]
     pub fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) -> Result<(), BuddyError> {
-        self.data
-            .lock_mut(|refer| ProtectedAllocator::<M>(refer.0).dealloc(ptr, layout))
+        self.protected_allocator
+            .lock_mut(|allocator| allocator.dealloc(ptr, layout))
             .unwrap()
     }
     // fn reserve(&self, index: usize, size: usize) -> Result<(), BuddyError> {
@@ -111,11 +97,11 @@ where
 impl<'a, T, X, const M: usize> Clone for BuddyAllocator<'a, T, X, M>
 where
     T: Deref<Target = X> + Send + Sync + Clone,
-    X: RwMutex<AddressSpace<'a, M>> + Send + Sync,
+    X: RwMutex<ProtectedAllocator<'a, M>> + Send + Sync,
 {
     fn clone(&self) -> Self {
         Self {
-            data: self.data.clone(),
+            protected_allocator: self.protected_allocator.clone(),
             error_hook: self.error_hook.clone(),
             phantom: PhantomData,
         }
@@ -125,7 +111,7 @@ where
 unsafe impl<'a, T, X, const M: usize> Allocator for BuddyAllocator<'a, T, X, M>
 where
     T: Deref<Target = X> + Send + Sync + Clone,
-    X: RwMutex<AddressSpace<'a, M>> + Send + Sync,
+    X: RwMutex<ProtectedAllocator<'a, M>> + Send + Sync,
 {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         self.allocate(layout).map_err(|e| {
@@ -167,7 +153,7 @@ impl<const SIZE: usize, const M: usize> StaticAddressSpace<SIZE, M> {
     /// Be carefull, static chunks affect hugely the executable's size
     pub const fn new() -> Self {
         let mut area: [u8; SIZE] = [0; SIZE];
-        ProtectedAllocator::<M>(&mut area).init();
+        static_init::<M>(&mut area);
         StaticAddressSpace(area)
     }
 }
@@ -186,13 +172,13 @@ where
     /// Allocate memory: should help for a global allocator implementation
     pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, BuddyError> {
         self.data
-            .lock_mut(|refer| ProtectedAllocator::<M>(&mut refer.0).alloc(layout))
+            .lock_mut(|refer| static_attach::<M>(&mut refer.0).alloc(layout))
             .unwrap()
     }
     /// dellocate memory: should help for a global allocator implementation
     pub fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) -> Result<(), BuddyError> {
         self.data
-            .lock_mut(|refer| ProtectedAllocator::<M>(&mut refer.0).dealloc(ptr, layout))
+            .lock_mut(|refer| static_attach::<M>(&mut refer.0).dealloc(ptr, layout))
             .unwrap()
     }
     // fn reserve(&self, index: usize, size: usize) -> Result<(), BuddyError> {
