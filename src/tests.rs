@@ -35,20 +35,20 @@ mod allocator {
     #[test]
     fn minimal() {
         #[repr(align(4096))]
-        struct MemChunk([u8; MIN_BUDDY_SIZE * MIN_BUDDY_NB]);
-        let mut chunk = MemChunk([0; MIN_BUDDY_SIZE * MIN_BUDDY_NB]);
-        let alloc = BuddyAllocator::new(Arc::new(Mutex::new(AddressSpace::<MIN_BUDDY_SIZE>(
+        struct MemChunk([u8; MIN_CELL_LEN * MIN_BUDDY_NB]);
+        let mut chunk = MemChunk([0; MIN_CELL_LEN * MIN_BUDDY_NB]);
+        let alloc = BuddyAllocator::new(Arc::new(Mutex::new(AddressSpace::<MIN_CELL_LEN>(
             chunk.0.as_mut_slice(),
         ))));
         let mut v = Vec::new();
         for _i in 0..3 {
-            let b = Box::try_new_in([0_u8; MIN_BUDDY_SIZE], &alloc);
+            let b = Box::try_new_in([0_u8; MIN_CELL_LEN], &alloc);
             if let Err(_) = &b {
                 panic!("Should be done");
             }
             v.push(b);
         }
-        let g = Box::try_new_in([0_u8; MIN_BUDDY_SIZE], &alloc);
+        let g = Box::try_new_in([0_u8; MIN_CELL_LEN], &alloc);
         if let Ok(_v) = &g {
             panic!("Should Fail");
         }
@@ -56,20 +56,20 @@ mod allocator {
     #[test]
     fn minimal_with_other_generic() {
         #[repr(align(4096))]
-        struct MemChunk([u8; MIN_BUDDY_SIZE * MIN_BUDDY_NB * 2]);
-        let mut chunk = MemChunk([0; MIN_BUDDY_SIZE * MIN_BUDDY_NB * 2]);
+        struct MemChunk([u8; MIN_CELL_LEN * MIN_BUDDY_NB * 2]);
+        let mut chunk = MemChunk([0; MIN_CELL_LEN * MIN_BUDDY_NB * 2]);
         let alloc = BuddyAllocator::new(Arc::new(Mutex::new(
-            AddressSpace::<{ MIN_BUDDY_SIZE * 2 }>(chunk.0.as_mut_slice()),
+            AddressSpace::<{ MIN_CELL_LEN * 2 }>(chunk.0.as_mut_slice()),
         )));
         let mut v = Vec::new();
         for _i in 0..3 {
-            let b = Box::try_new_in([0xaa_u8; MIN_BUDDY_SIZE * 2], &alloc);
+            let b = Box::try_new_in([0xaa_u8; MIN_CELL_LEN * 2], &alloc);
             if let Err(_) = &b {
                 panic!("Should be done");
             }
             v.push(b);
         }
-        let g = Box::try_new_in([0xbb_u8; MIN_BUDDY_SIZE * 2], &alloc);
+        let g = Box::try_new_in([0xbb_u8; MIN_CELL_LEN * 2], &alloc);
         if let Ok(_v) = &g {
             panic!("Should Fail");
         }
@@ -188,18 +188,18 @@ mod buddy_convert {
     #[test]
     fn normal() {
         [
-            (MIN_BUDDY_SIZE / 4, MIN_BUDDY_SIZE / 4, MIN_BUDDY_SIZE),
-            (MIN_BUDDY_SIZE, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE),
-            (MIN_BUDDY_SIZE / 4, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE),
-            (0, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE),
-            (0, MIN_BUDDY_SIZE * 2, MIN_BUDDY_SIZE * 2),
-            (1, 1, MIN_BUDDY_SIZE),
-            (1, MIN_BUDDY_SIZE * 2, MIN_BUDDY_SIZE * 2),
-            (MIN_BUDDY_SIZE * 2 - 2, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE * 2),
-            (MIN_BUDDY_SIZE + 1, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE * 2),
-            (MIN_BUDDY_SIZE * 8, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE * 8),
-            (MIN_BUDDY_SIZE * 32 + 1, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE * 64),
-            (MIN_BUDDY_SIZE * 257, MIN_BUDDY_SIZE, MIN_BUDDY_SIZE * 512),
+            (MIN_CELL_LEN / 4, MIN_CELL_LEN / 4, MIN_CELL_LEN),
+            (MIN_CELL_LEN, MIN_CELL_LEN, MIN_CELL_LEN),
+            (MIN_CELL_LEN / 4, MIN_CELL_LEN, MIN_CELL_LEN),
+            (0, MIN_CELL_LEN, MIN_CELL_LEN),
+            (0, MIN_CELL_LEN * 2, MIN_CELL_LEN * 2),
+            (1, 1, MIN_CELL_LEN),
+            (1, MIN_CELL_LEN * 2, MIN_CELL_LEN * 2),
+            (MIN_CELL_LEN * 2 - 2, MIN_CELL_LEN, MIN_CELL_LEN * 2),
+            (MIN_CELL_LEN + 1, MIN_CELL_LEN, MIN_CELL_LEN * 2),
+            (MIN_CELL_LEN * 8, MIN_CELL_LEN, MIN_CELL_LEN * 8),
+            (MIN_CELL_LEN * 32 + 1, MIN_CELL_LEN, MIN_CELL_LEN * 64),
+            (MIN_CELL_LEN * 257, MIN_CELL_LEN, MIN_CELL_LEN * 512),
             (usize::MAX / 4 + 1, MAX_SUPPORTED_ALIGN, usize::MAX / 4 + 1),
         ]
         .into_iter()
@@ -207,8 +207,8 @@ mod buddy_convert {
             let layout = Layout::from_size_align(size, align)
                 .expect(format!("size {} align {}", size, align).as_str());
             assert_eq!(
-                BuddySize::<MIN_BUDDY_SIZE>::try_from(layout).unwrap().0,
-                BuddySize::<MIN_BUDDY_SIZE>(buddy_size.try_into().unwrap()).0,
+                BuddySize::<MIN_CELL_LEN>::try_from(layout).unwrap().0,
+                BuddySize::<MIN_CELL_LEN>(buddy_size.try_into().unwrap()).0,
                 "size {} align {} resulut {}",
                 size,
                 align,
@@ -219,7 +219,7 @@ mod buddy_convert {
     #[should_panic]
     #[test]
     fn unsuported_align_request() {
-        BuddySize::<MIN_BUDDY_SIZE>::try_from(
+        BuddySize::<MIN_CELL_LEN>::try_from(
             Layout::from_size_align(usize::MAX, MAX_SUPPORTED_ALIGN * 2).unwrap(),
         )
         .unwrap();
@@ -227,7 +227,7 @@ mod buddy_convert {
     #[should_panic]
     #[test]
     fn unsuported_size_request() {
-        BuddySize::<MIN_BUDDY_SIZE>::try_from(
+        BuddySize::<MIN_CELL_LEN>::try_from(
             Layout::from_size_align(usize::MAX - 0x1000_0000, MAX_SUPPORTED_ALIGN).unwrap(),
         )
         .unwrap();
@@ -238,21 +238,21 @@ mod order_convert {
     #[test]
     fn normal() {
         [
-            (MIN_BUDDY_SIZE, MIN_BUDDY_SIZE, 0),
-            (MIN_BUDDY_SIZE * 2, MIN_BUDDY_SIZE * 4, 1),
-            (MIN_BUDDY_SIZE * 4, MIN_BUDDY_SIZE * 16, 2),
-            (MIN_BUDDY_SIZE, MIN_BUDDY_SIZE * 64, 6),
-            (MIN_BUDDY_SIZE * 2, MIN_BUDDY_SIZE * 64, 5),
-            (MIN_BUDDY_SIZE * 64, MIN_BUDDY_SIZE * 256, 2),
-            (MIN_BUDDY_SIZE * 128, MIN_BUDDY_SIZE * 256, 1),
-            (MIN_BUDDY_SIZE * 256, MIN_BUDDY_SIZE * 256, 0),
+            (MIN_CELL_LEN, MIN_CELL_LEN, 0),
+            (MIN_CELL_LEN * 2, MIN_CELL_LEN * 4, 1),
+            (MIN_CELL_LEN * 4, MIN_CELL_LEN * 16, 2),
+            (MIN_CELL_LEN, MIN_CELL_LEN * 64, 6),
+            (MIN_CELL_LEN * 2, MIN_CELL_LEN * 64, 5),
+            (MIN_CELL_LEN * 64, MIN_CELL_LEN * 256, 2),
+            (MIN_CELL_LEN * 128, MIN_CELL_LEN * 256, 1),
+            (MIN_CELL_LEN * 256, MIN_CELL_LEN * 256, 0),
         ]
         .into_iter()
         .for_each(|(curr, max, order)| {
             assert_eq!(
                 Order::try_from((
-                    BuddySize::<MIN_BUDDY_SIZE>(curr),
-                    BuddySize::<MIN_BUDDY_SIZE>(max)
+                    BuddySize::<MIN_CELL_LEN>(curr),
+                    BuddySize::<MIN_CELL_LEN>(max)
                 ))
                 .expect(&format!("curr {} max {}", curr, max))
                 .0,
@@ -268,8 +268,8 @@ mod order_convert {
     #[test]
     fn out_of_order() {
         Order::try_from((
-            BuddySize::<MIN_BUDDY_SIZE>(MIN_BUDDY_SIZE * 8),
-            BuddySize::<MIN_BUDDY_SIZE>(MIN_BUDDY_SIZE * 4),
+            BuddySize::<MIN_CELL_LEN>(MIN_CELL_LEN * 8),
+            BuddySize::<MIN_CELL_LEN>(MIN_CELL_LEN * 4),
         ))
         .unwrap();
     }
@@ -277,8 +277,8 @@ mod order_convert {
     #[test]
     fn bad_buddy_size() {
         Order::try_from((
-            BuddySize::<MIN_BUDDY_SIZE>(MIN_BUDDY_SIZE * 2),
-            BuddySize::<MIN_BUDDY_SIZE>(MIN_BUDDY_SIZE * 8 - 4),
+            BuddySize::<MIN_CELL_LEN>(MIN_CELL_LEN * 2),
+            BuddySize::<MIN_CELL_LEN>(MIN_CELL_LEN * 8 - 4),
         ))
         .unwrap();
     }
@@ -295,20 +295,20 @@ mod constructor {
     };
     #[test]
     fn minimal_mem_block() {
-        ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
-            &mut MEMORY_FIELD.array[..MIN_BUDDY_SIZE * MIN_BUDDY_NB]
+        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
+            &mut MEMORY_FIELD.array[..MIN_CELL_LEN * MIN_BUDDY_NB]
         })
         .init();
     }
     #[should_panic]
     #[test]
     fn too_small_mem_block() {
-        ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe { &mut MEMORY_FIELD.array[..MIN_BUDDY_SIZE] })
+        ProtectedAllocator::<MIN_CELL_LEN>(unsafe { &mut MEMORY_FIELD.array[..MIN_CELL_LEN] })
             .init();
     }
     #[test]
     fn maximal_mem_block() {
-        ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
+        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
             std::slice::from_raw_parts_mut(MEMORY_FIELD.array.as_mut_ptr(), MEMORY_FIELD_SIZE)
         })
         .init();
@@ -316,7 +316,7 @@ mod constructor {
     #[should_panic]
     #[test]
     fn too_big_mem_block() {
-        ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
+        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
             std::slice::from_raw_parts_mut(
                 MEMORY_FIELD.array.as_mut_ptr(),
                 MEMORY_FIELD_SIZE + 0x1000,
@@ -326,37 +326,37 @@ mod constructor {
     }
     #[test]
     fn aligned_mem_block1() {
-        ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
-            &mut MEMORY_FIELD.array[MIN_BUDDY_SIZE * 20..MIN_BUDDY_SIZE * (20 + MIN_BUDDY_NB)]
+        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
+            &mut MEMORY_FIELD.array[MIN_CELL_LEN * 20..MIN_CELL_LEN * (20 + MIN_BUDDY_NB)]
         })
         .init();
     }
     #[should_panic]
     #[test]
     fn bad_aligned_mem_block1() {
-        ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
-            &mut MEMORY_FIELD.array[4..MIN_BUDDY_SIZE * 2 + 4]
+        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
+            &mut MEMORY_FIELD.array[4..MIN_CELL_LEN * 2 + 4]
         })
         .init();
     }
     #[test]
     fn aligned_mem_block2() {
-        ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
-            &mut MEMORY_FIELD.array[MIN_BUDDY_SIZE * 8..MIN_BUDDY_SIZE * 16]
+        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
+            &mut MEMORY_FIELD.array[MIN_CELL_LEN * 8..MIN_CELL_LEN * 16]
         })
         .init();
     }
     #[should_panic]
     #[test]
     fn bad_aligned_mem_block2() {
-        ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
-            &mut MEMORY_FIELD.array[MIN_BUDDY_SIZE * 9..MIN_BUDDY_SIZE * 17]
+        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
+            &mut MEMORY_FIELD.array[MIN_CELL_LEN * 9..MIN_CELL_LEN * 17]
         })
         .init();
     }
     #[test]
     fn aligned_mem_block3() {
-        ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
+        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
             &mut MEMORY_FIELD.array[MAX_SUPPORTED_ALIGN..MAX_SUPPORTED_ALIGN * 17]
         })
         .init();
@@ -364,7 +364,7 @@ mod constructor {
     #[should_panic]
     #[test]
     fn bad_aligned_mem_block3() {
-        ProtectedAllocator::<MIN_BUDDY_SIZE>(unsafe {
+        ProtectedAllocator::<MIN_CELL_LEN>(unsafe {
             &mut MEMORY_FIELD.array
                 [(MAX_SUPPORTED_ALIGN / 2)..(MAX_SUPPORTED_ALIGN * 16) + (MAX_SUPPORTED_ALIGN / 2)]
         })
@@ -372,16 +372,16 @@ mod constructor {
     }
     #[test]
     fn generic_size_changed() {
-        ProtectedAllocator::<{ MIN_BUDDY_SIZE * 2 }>(unsafe {
-            &mut MEMORY_FIELD.array[..MIN_BUDDY_SIZE * MIN_BUDDY_NB * 2]
+        ProtectedAllocator::<{ MIN_CELL_LEN * 2 }>(unsafe {
+            &mut MEMORY_FIELD.array[..MIN_CELL_LEN * MIN_BUDDY_NB * 2]
         })
         .init();
     }
     #[should_panic]
     #[test]
     fn generic_below_min_size() {
-        ProtectedAllocator::<{ MIN_BUDDY_SIZE / 2 }>(unsafe {
-            &mut MEMORY_FIELD.array[..MIN_BUDDY_SIZE * MIN_BUDDY_NB]
+        ProtectedAllocator::<{ MIN_CELL_LEN / 2 }>(unsafe {
+            &mut MEMORY_FIELD.array[..MIN_CELL_LEN * MIN_BUDDY_NB]
         })
         .init();
     }
@@ -397,7 +397,7 @@ mod constructor {
     #[should_panic]
     #[test]
     fn generic_unaligned_min_size() {
-        ProtectedAllocator::<{ MIN_BUDDY_SIZE / 2 * 3 }>(unsafe {
+        ProtectedAllocator::<{ MIN_CELL_LEN / 2 * 3 }>(unsafe {
             &mut MEMORY_FIELD.array[..MEMORY_FIELD_SIZE]
         })
         .init();

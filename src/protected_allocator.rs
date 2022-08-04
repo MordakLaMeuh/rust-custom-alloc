@@ -1,7 +1,3 @@
-//! Inner part of BuddyAllocator and StaticBuddyAllocator
-/// Partie interne de l'allocateur.
-pub struct ProtectedAllocator<'a, const M: usize>(pub &'a mut [u8]);
-
 mod math;
 use math::{round_up_2, trailing_zero_right};
 #[macro_use]
@@ -10,11 +6,17 @@ mod macros;
 use core::alloc::Layout;
 use core::ptr::NonNull;
 
-pub const MIN_BUDDY_SIZE: usize = 8; // arbitrary choice
+/// Allowed size of the smallest buddy
+pub const MIN_CELL_LEN: usize = 8; // arbitrary choice
+/// TODO: The alignment constraint must be reviewed
 pub const MAX_SUPPORTED_ALIGN: usize = 4096; // unix standard page size
-pub const MIN_BUDDY_NB: usize = 4;
+/// Minimum number of buddy allowed
+pub const MIN_BUDDY_NB: usize = 4; // arbitrary choice
 
 const FIRST_INDEX: usize = 1; // index 0 is never used
+
+/// Inner part of BuddyAllocator and StaticBuddyAllocator
+pub struct ProtectedAllocator<'a, const M: usize>(pub &'a mut [u8]);
 
 #[derive(Debug, Copy, Clone)]
 pub struct BuddySize<const M: usize>(pub usize);
@@ -33,7 +35,7 @@ impl<'a, const M: usize> ProtectedAllocator<'a, M> {
     /// Initialisation, organise l'espace memoire en inscrivant les metadonnees necessaires.
     pub const fn init(&'a mut self) {
         // ___ MAX LEN OF ADDRESS SPACE IS CONSTRAINED BY USIZE BIT SCHEME, DEPENDS OF ARCH ___
-        assert!(M >= MIN_BUDDY_SIZE);
+        assert!(M >= MIN_CELL_LEN);
         // ___ Four Buddy minimum are allowed but is not optimal at all ___
         assert!(M <= usize::MAX / MIN_BUDDY_NB + 1);
         assert!(self.0.len() == usize::MAX || self.0.len() >= M * MIN_BUDDY_NB);
@@ -214,18 +216,15 @@ impl<const M: usize> const TryFrom<(BuddySize<M>, BuddySize<M>)> for Order {
     }
 }
 
-// TODO: Put MAX_SUPPORTED_ALIGN & ADDRESS_SPACE_MAX_LEN into static string
 impl<const M: usize> const TryFrom<Layout> for BuddySize<M> {
     type Error = Error;
     #[inline(always)]
     fn try_from(layout: Layout) -> Result<Self, Self::Error> {
         let size = max!(layout.size(), layout.align(), M);
         if size > usize::MAX / MIN_BUDDY_NB + 1 {
-            Err(Error(
-                "Size must be lower or eq than {ADDRESS_SPACE_MAX_LEN}",
-            ))
+            Err(Error("Bad size"))
         } else if layout.align() > MAX_SUPPORTED_ALIGN {
-            Err(Error("Alignement too big: MAX - {MAX_SUPPORTED_ALIGN}"))
+            Err(Error("Alignement too big"))
         } else {
             Ok(BuddySize(round_up_2(size)))
         }

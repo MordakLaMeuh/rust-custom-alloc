@@ -1,52 +1,27 @@
 //! Custom Allocator based on buddy System
 #![deny(missing_docs)]
 #![cfg_attr(all(feature = "no-std", not(test)), no_std)]
-// Allow use of custom allocator
 #![feature(allocator_api)]
-// Get a pointer from the beginning of the slice
-#![feature(slice_ptr_get)]
-// Const fn align_offset of std::ptr
-#![feature(const_align_offset)]
-// Use of mutable reference into const fn
-#![feature(const_mut_refs)]
-// Allow to use Index and IndexMut on slices in const fn
-#![feature(const_slice_index)]
-// Use of Option<T> in const fn
-#![feature(const_option)]
-// Used for impl TryFrom boilerplates in const fn
-#![feature(const_convert)]
-// Allow to writes boilerplates with const before impl keyword
-#![feature(const_trait_impl)]
-// Allow use of Try operator ? on Result in const fn
-#![feature(const_try)]
-// allow to use From and Into on Integer an float types in const Fn
-#![feature(const_num_from_num)]
-// NOTE: Unwrapping Result<T, E> on const Fn is impossible for the moment
-// We use ok() to drop the Result and then just unwrapping the Option<T>
-// The associated feature for that is 'const_result_drop'
-#![feature(const_result_drop)]
-// Allow to use const_looping see: https://github.com/rust-lang/rust/issues/93481
-#![feature(const_eval_limit)]
-#![const_eval_limit = "0"]
-// Allow to use addr() fm on std::ptr
 #![feature(strict_provenance)]
-// CFG attributes directly inside function for expressions
 #![feature(stmt_expr_attributes)]
-// ___ Testing on 64bits system Linux (with address sanitizer) ___
-// RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo test -Zbuild-std --target x86_64-unknown-linux-gnu
-// ___ Testing on 32bits system Linux (address sanitizer is unaivalable for this arch) ___
-// RUST_BACKTRACE=1 cargo test --target i686-unknown-linux-gnu
+#![feature(slice_ptr_get)]
+#![feature(const_align_offset)]
+#![feature(const_mut_refs)]
+#![feature(const_slice_index)]
+#![feature(const_option)]
+#![feature(const_convert)]
+#![feature(const_trait_impl)]
+#![feature(const_try)]
+#![feature(const_num_from_num)]
+#![feature(const_result_drop)]
+#![feature(const_eval_limit)] // https://github.com/rust-lang/rust/issues/93481
+#![const_eval_limit = "0"]
 
 mod mutex;
 mod protected_allocator;
-
 #[cfg(test)]
 mod tests;
-// TODO: Draw nodes to explain the Buddy research update tree
-// TODO: Select location of buddy Metadata
-// TODO: Create test of allowing more memory space to be addressable
-// TODO: Reserve blocks
-// TODO: Create good documentations
+
 use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
 use core::marker::PhantomData;
 use core::ops::Deref;
@@ -57,15 +32,10 @@ use core::ptr::NonNull;
 use std::alloc::handle_alloc_error;
 
 /// These traits are exported to implement with your own Mutex
-pub use mutex::{GenericMutex, RoMutex, RwMutex};
+pub use mutex::RwMutex;
 
 pub use protected_allocator::ProtectedAllocator;
-// #![cfg_attr(all(feature = "no-std", not(test)), feature(alloc_error_handler))]
-// #[cfg(all(feature = "no-std", not(test)))]
-// #[alloc_error_handler]
-// fn out_of_memory(_: core::alloc::Layout) -> ! {
-//      panic!("Sa mere");
-// }
+pub use protected_allocator::{MAX_SUPPORTED_ALIGN, MIN_BUDDY_NB, MIN_CELL_LEN};
 
 impl<'a, const M: usize> AddressSpace<'a, M> {
     /// Create a new Address Space
@@ -74,8 +44,8 @@ impl<'a, const M: usize> AddressSpace<'a, M> {
     }
 }
 
-///Wrapper for &mut [u8] witch contains generics declarations
-pub struct AddressSpace<'a, const M: usize>(&'a mut [u8]);
+///Wrapper for &mut \[[u8]\] witch contains generics declarations
+pub struct AddressSpace<'a, const M: usize>(pub &'a mut [u8]);
 
 /// Buddy Allocator
 #[repr(C, align(16))]
@@ -90,10 +60,6 @@ pub struct BuddyAllocator<
 }
 
 /// Clone Boilerplate for BuddyAllocator<'a, T, X, M>... - Cannot Derive Naturaly
-//    = note: the following trait bounds were not satisfied:
-//            `Mutex<&mut [u8]>: Clone`
-// 113 | #[derive(Clone)]
-//     |          ^^^^^ unsatisfied trait bound introduced in this `derive` macro
 impl<'a, T, X, const M: usize> Clone for BuddyAllocator<'a, T, X, M>
 where
     T: Deref<Target = X> + Send + Sync + Clone,
@@ -159,28 +125,12 @@ where
             })
             .unwrap();
     }
-    /// Used only for debug purposes
-    #[cfg(not(feature = "no-std"))]
-    #[allow(dead_code)]
-    fn debug(&self) {
-        self.data
-            .lock_mut(|refer| {
-                for (i, v) in refer.0.iter().enumerate() {
-                    print!("{:02x} ", v);
-                    if i != 0 && (i + 1) % 32 == 0 {
-                        println!();
-                    }
-                }
-                println!();
-            })
-            .unwrap();
-    }
 }
 
 /// Static Buddy Allocator
 #[repr(C, align(16))]
 pub struct StaticBuddyAllocator<
-    X: GenericMutex<StaticAddressSpace<SIZE, M>>,
+    X: RwMutex<StaticAddressSpace<SIZE, M>>,
     const SIZE: usize,
     const M: usize,
 >(X);
@@ -199,8 +149,9 @@ impl<const SIZE: usize, const M: usize> StaticAddressSpace<SIZE, M> {
     }
 }
 
-impl<X: RwMutex<StaticAddressSpace<SIZE, M>>, const SIZE: usize, const M: usize>
-    StaticBuddyAllocator<X, SIZE, M>
+impl<X, const SIZE: usize, const M: usize> StaticBuddyAllocator<X, SIZE, M>
+where
+    X: RwMutex<StaticAddressSpace<SIZE, M>>,
 {
     /// Attach a previously allocated chunk generated by create_static_memory_area()
     pub const fn new(mutex_of_static_address_space: X) -> Self {
@@ -228,8 +179,9 @@ impl<X: RwMutex<StaticAddressSpace<SIZE, M>>, const SIZE: usize, const M: usize>
     }
 }
 
-unsafe impl<X: RwMutex<StaticAddressSpace<SIZE, M>>, const SIZE: usize, const M: usize> Allocator
-    for StaticBuddyAllocator<X, SIZE, M>
+unsafe impl<X, const SIZE: usize, const M: usize> Allocator for StaticBuddyAllocator<X, SIZE, M>
+where
+    X: RwMutex<StaticAddressSpace<SIZE, M>>,
 {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         self.allocate(layout)
@@ -239,8 +191,9 @@ unsafe impl<X: RwMutex<StaticAddressSpace<SIZE, M>>, const SIZE: usize, const M:
     }
 }
 
-unsafe impl<X: RwMutex<StaticAddressSpace<SIZE, M>>, const SIZE: usize, const M: usize> GlobalAlloc
-    for StaticBuddyAllocator<X, SIZE, M>
+unsafe impl<X, const SIZE: usize, const M: usize> GlobalAlloc for StaticBuddyAllocator<X, SIZE, M>
+where
+    X: RwMutex<StaticAddressSpace<SIZE, M>>,
 {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         match self.allocate(layout) {
@@ -262,7 +215,42 @@ unsafe impl<X: RwMutex<StaticAddressSpace<SIZE, M>>, const SIZE: usize, const M:
 impl const From<protected_allocator::Error> for AllocError {
     #[inline(always)]
     fn from(error: protected_allocator::Error) -> Self {
-        // Dump something ?
         AllocError
     }
 }
+
+// TODO: Rework of errors and allow possibility to set hook
+// TODO: design Realloc & Shrink
+// TODO: Draw nodes to explain the Buddy research update tree
+// TODO: Select location of buddy Metadata
+// TODO: Create test of allowing more memory space to be addressable
+// TODO: Reserve blocks
+// TODO: Create good documentations
+
+// /// Used only for debug purposes
+// #[cfg(not(feature = "no-std"))]
+// #[allow(dead_code)]
+// fn debug(&self) {
+//     self.data
+//         .lock_mut(|refer| {
+//             for (i, v) in refer.0.iter().enumerate() {
+//                 print!("{:02x} ", v);
+//                 if i != 0 && (i + 1) % 32 == 0 {
+//                     println!();
+//                 }
+//             }
+//             println!();
+//         })
+//         .unwrap();
+// }
+
+// #![cfg_attr(all(feature = "no-std", not(test)), feature(alloc_error_handler))]
+// #[cfg(all(feature = "no-std", not(test)))]
+// #[alloc_error_handler]
+// fn out_of_memory(_: core::alloc::Layout) -> ! {
+//      panic!("Sa mere");
+// }
+// ___ Testing on 64bits system Linux (with address sanitizer) ___
+// RUST_BACKTRACE=1 RUSTFLAGS=-Zsanitizer=address cargo test -Zbuild-std --target x86_64-unknown-linux-gnu
+// ___ Testing on 32bits system Linux (address sanitizer is unaivalable for this arch) ___
+// RUST_BACKTRACE=1 cargo test --target i686-unknown-linux-gnu
