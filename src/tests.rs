@@ -2,7 +2,7 @@ mod random;
 #[cfg(not(feature = "no-std"))]
 use random::{srand_init, Rand};
 
-use super::protected_allocator::*;
+use super::inner_allocator::*;
 use super::*;
 
 #[cfg(not(feature = "no-std"))]

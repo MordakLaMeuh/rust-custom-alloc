@@ -17,8 +17,8 @@
 #![feature(const_eval_limit)] // https://github.com/rust-lang/rust/issues/93481
 #![const_eval_limit = "0"]
 
+mod inner_allocator;
 mod mutex;
-mod protected_allocator;
 #[cfg(test)]
 mod tests;
 
@@ -34,9 +34,9 @@ use std::alloc::handle_alloc_error;
 /// These traits are exported to implement with your own Mutex
 pub use mutex::RwMutex;
 
-pub use protected_allocator::BuddyError;
-pub use protected_allocator::{AddressSpaceRef, InnerBuddy, StaticAddressSpace};
-pub use protected_allocator::{MAX_SUPPORTED_ALIGN, MIN_BUDDY_NB, MIN_CELL_LEN};
+pub use inner_allocator::BuddyError;
+pub use inner_allocator::{AddressSpaceRef, InnerBuddy, StaticAddressSpace};
+pub use inner_allocator::{MAX_SUPPORTED_ALIGN, MIN_BUDDY_NB, MIN_CELL_LEN};
 
 /// Buddy Allocator
 #[repr(C, align(16))]
