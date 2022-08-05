@@ -16,6 +16,7 @@
 #![feature(const_result_drop)]
 #![feature(const_eval_limit)] // https://github.com/rust-lang/rust/issues/93481
 #![const_eval_limit = "0"]
+#![feature(generic_const_exprs)]
 
 mod inner_allocator;
 mod mutex;
@@ -35,7 +36,8 @@ use std::alloc::handle_alloc_error;
 pub use mutex::RwMutex;
 
 pub use inner_allocator::BuddyError;
-pub use inner_allocator::{AddressSpaceRef, InnerBuddy, StaticAddressSpace};
+// pub use inner_allocator::{AddressSpaceRef, InnerBuddy, StaticAddressSpace};
+pub use inner_allocator::{AddressSpaceRef, InnerBuddy};
 pub use inner_allocator::{MAX_SUPPORTED_ALIGN, MIN_BUDDY_NB, MIN_CELL_LEN};
 
 /// Buddy Allocator
