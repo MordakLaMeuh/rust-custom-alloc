@@ -49,7 +49,7 @@ impl<const SIZE: usize, const M: usize> const From<&'static mut StaticAddressSpa
 }
 
 /// Inner part of BuddyAllocator and StaticBuddyAllocator
-pub struct ProtectedAllocator<'a, const M: usize>(AddressSpaceRef<'a, M>);
+pub struct InnerBuddy<'a, const M: usize>(AddressSpaceRef<'a, M>);
 
 #[derive(Debug, Copy, Clone)]
 pub struct BuddySize<const M: usize>(pub usize);
@@ -61,24 +61,28 @@ enum Op {
     Deallocate,
 }
 
-impl<'a, const M: usize> ProtectedAllocator<'a, M> {
+impl<'a, const M: usize> InnerBuddy<'a, M> {
     /// TODO
     pub const fn new(address_space_ref: AddressSpaceRef<'a, M>) -> Self {
         Self(address_space_ref)
     }
     /// TODO
+    #[inline(always)]
     pub fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, BuddyError> {
         alloc::<M>(self.0 .0, layout)
     }
     /// TODO
+    #[inline(always)]
     pub fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) -> Result<(), BuddyError> {
         dealloc::<M>(self.0 .0, ptr, layout)
     }
     /// TODO
+    #[inline(always)]
     pub fn reserve(&mut self, _index: usize, _size: usize) -> Result<(), BuddyError> {
         unimplemented!();
     }
     /// TODO
+    #[inline(always)]
     pub fn unreserve(&mut self, _index: usize) -> Result<(), BuddyError> {
         unimplemented!();
     }
@@ -139,6 +143,7 @@ const fn init<const M: usize>(space: &mut [u8]) {
     .expect("Woot ? Already insuffisant memory ?!? That Buddy Allocator sucks !");
 }
 /// Alloue un nouvel objet selon le layout et retourne son addresse.
+#[inline(always)]
 const fn alloc<const M: usize>(
     space: &mut [u8],
     layout: Layout,
@@ -146,6 +151,7 @@ const fn alloc<const M: usize>(
     set_mark::<M>(space, BuddySize::try_from(layout)?)
 }
 /// Desalloue un objet prealablement alloue.
+#[inline(always)]
 fn dealloc<const M: usize>(
     space: &mut [u8],
     ptr: NonNull<u8>,
@@ -165,6 +171,7 @@ fn dealloc<const M: usize>(
         start_idx + (alloc_offset as u128 * (1 << order.0) as u128 / space.len() as u128) as usize;
     unset_mark(space, order, index)
 }
+#[inline(always)]
 const fn set_mark<const M: usize>(
     space: &mut [u8],
     buddy_size: BuddySize<M>,
@@ -206,6 +213,7 @@ const fn set_mark<const M: usize>(
         ))
     }
 }
+#[inline(always)]
 const fn unset_mark(space: &mut [u8], order: Order, index: usize) -> Result<(), BuddyError> {
     if space[index] & 0x80 == 0 {
         Err(BuddyError::DoubleFreeOrCorruption)

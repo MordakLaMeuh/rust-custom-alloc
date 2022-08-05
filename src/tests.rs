@@ -14,8 +14,8 @@ mod allocator {
         #[repr(align(4096))]
         struct MemChunk([u8; 256]);
         let mut chunk = MemChunk([0; 256]);
-        let alloc = BuddyAllocator::new(Arc::new(StaticBuddyAllocator::new(
-            Mutex::new(ProtectedAllocator::<64>::new(chunk.0.as_mut_slice().into())),
+        let alloc = ClonableBuddy::new(Arc::new(ProtectedBuddy::new(
+            Mutex::new(InnerBuddy::<64>::new(chunk.0.as_mut_slice().into())),
             None,
         )));
 
@@ -38,8 +38,8 @@ mod allocator {
         #[repr(align(4096))]
         struct MemChunk([u8; MIN_CELL_LEN * MIN_BUDDY_NB]);
         let mut chunk = MemChunk([0; MIN_CELL_LEN * MIN_BUDDY_NB]);
-        let alloc = BuddyAllocator::new(Arc::new(StaticBuddyAllocator::new(
-            Mutex::new(ProtectedAllocator::<MIN_CELL_LEN>::new(
+        let alloc = ClonableBuddy::new(Arc::new(ProtectedBuddy::new(
+            Mutex::new(InnerBuddy::<MIN_CELL_LEN>::new(
                 chunk.0.as_mut_slice().into(),
             )),
             None,
@@ -62,8 +62,8 @@ mod allocator {
         #[repr(align(4096))]
         struct MemChunk([u8; MIN_CELL_LEN * MIN_BUDDY_NB * 2]);
         let mut chunk = MemChunk([0; MIN_CELL_LEN * MIN_BUDDY_NB * 2]);
-        let alloc = BuddyAllocator::new(Arc::new(StaticBuddyAllocator::new(
-            Mutex::new(ProtectedAllocator::<{ MIN_CELL_LEN * 2 }>::new(
+        let alloc = ClonableBuddy::new(Arc::new(ProtectedBuddy::new(
+            Mutex::new(InnerBuddy::<{ MIN_CELL_LEN * 2 }>::new(
                 chunk.0.as_mut_slice().into(),
             )),
             None,
@@ -139,8 +139,8 @@ mod allocator {
     fn memory_sodomizer() {
         srand_init(10);
         for _ in 0..4 {
-            let alloc = BuddyAllocator::new(Arc::new(StaticBuddyAllocator::new(
-                Mutex::new(ProtectedAllocator::<64>::new(unsafe {
+            let alloc = ClonableBuddy::new(Arc::new(ProtectedBuddy::new(
+                Mutex::new(InnerBuddy::<64>::new(unsafe {
                     CHUNK.0.as_mut_slice().into()
                 })),
                 Some(|e| {
@@ -161,12 +161,14 @@ mod allocator {
         // the object will continue to live.
         let refer = &mut aligned_memory[0].0;
         let refer_static = unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(refer) };
-        let alloc = BuddyAllocator::new(Arc::new(StaticBuddyAllocator::new(
-            Mutex::new(ProtectedAllocator::<64>::new(refer_static.into())),
+        let alloc = ClonableBuddy::new(Arc::new(ProtectedBuddy::new(
+            Mutex::new(InnerBuddy::<64>::new(refer_static.into())),
             Some(|e| {
                 dbg!(e);
             }),
         )));
+        // let alloc = ClonableBuddy::new(Arc::new, Mutex::new, 64, refer_static);
+        // let alloc = ProtectedBuddy::new(Mutex::new, 64, refer_static);
 
         let mut thread_list = Vec::new();
         for _ in 0..4 {
@@ -183,17 +185,13 @@ mod allocator {
     const MIN_CELL_LEN: usize = 64;
     static mut STATIC_SPACE: StaticAddressSpace<CHUNK_SIZE, MIN_CELL_LEN> =
         StaticAddressSpace::new();
-    static STATIC_ALLOCATOR: StaticBuddyAllocator<
-        Mutex<ProtectedAllocator<MIN_CELL_LEN>>,
-        MIN_CELL_LEN,
-    > = StaticBuddyAllocator::new(
-        Mutex::new(ProtectedAllocator::new(unsafe {
-            (&mut STATIC_SPACE).into()
-        })),
-        Some(|e| {
-            dbg!(<BuddyError as Into<&str>>::into(e));
-        }),
-    );
+    static STATIC_ALLOCATOR: ProtectedBuddy<Mutex<InnerBuddy<MIN_CELL_LEN>>, MIN_CELL_LEN> =
+        ProtectedBuddy::new(
+            Mutex::new(InnerBuddy::new(unsafe { (&mut STATIC_SPACE).into() })),
+            Some(|e| {
+                dbg!(<BuddyError as Into<&str>>::into(e));
+            }),
+        );
     #[test]
     fn memory_sodomizer_multithreaded_with_static() {
         srand_init(42);
