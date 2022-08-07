@@ -281,7 +281,7 @@ impl<'a, const M: usize> AddressSpaceRef<'a, M> {
         }
     }
     #[inline(always)]
-    const fn unset_mark(&mut self, order: Order, index: usize) -> Result<(), BuddyError> {
+    fn unset_mark(&mut self, order: Order, index: usize) -> Result<(), BuddyError> {
         if self.m[index] & 0x80 == 0 {
             Err(BuddyError::DoubleFreeOrCorruption)
         } else {
@@ -293,7 +293,7 @@ impl<'a, const M: usize> AddressSpaceRef<'a, M> {
         }
     }
     #[inline(always)]
-    const fn modify_parents(&mut self, mut index: usize, mut order: Order, op: Op) {
+    fn modify_parents(&mut self, mut index: usize, mut order: Order, op: Op) {
         while index > FIRST_INDEX {
             let parent = index / 2; // 1/2n --> binary heap
             let child_left = 2 * parent;
@@ -319,7 +319,7 @@ impl<'a, const M: usize> AddressSpaceRef<'a, M> {
     }
 }
 
-impl<const M: usize> const TryFrom<(BuddySize<M>, BuddySize<M>)> for Order {
+impl<const M: usize> TryFrom<(BuddySize<M>, BuddySize<M>)> for Order {
     type Error = BuddyError;
     #[inline(always)]
     fn try_from(
@@ -351,7 +351,7 @@ impl<const M: usize> const TryFrom<(BuddySize<M>, BuddySize<M>)> for Order {
     }
 }
 
-impl<const M: usize> const TryFrom<Layout> for BuddySize<M> {
+impl<const M: usize> TryFrom<Layout> for BuddySize<M> {
     type Error = BuddyError;
     #[inline(always)]
     fn try_from(layout: Layout) -> Result<Self, Self::Error> {
@@ -381,7 +381,7 @@ pub enum BuddyError {
     NoMoreSpace,
 }
 
-impl const From<BuddyError> for &'static str {
+impl From<BuddyError> for &'static str {
     fn from(error: BuddyError) -> Self {
         use BuddyError::*;
         match error {

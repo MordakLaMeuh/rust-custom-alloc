@@ -3,20 +3,20 @@
 #![cfg_attr(all(feature = "no-std", not(test)), no_std)]
 #![feature(allocator_api)]
 #![feature(strict_provenance)]
-#![feature(stmt_expr_attributes)]
 #![feature(slice_ptr_get)]
 #![feature(const_align_offset)]
 #![feature(const_mut_refs)]
-#![feature(const_slice_index)]
-#![feature(const_option)]
-#![feature(const_convert)]
+#![feature(const_convert)] // for tests
 #![feature(const_trait_impl)]
-#![feature(const_try)]
-#![feature(const_num_from_num)]
-#![feature(const_result_drop)]
-#![feature(const_eval_limit)] // https://github.com/rust-lang/rust/issues/93481
-#![const_eval_limit = "0"]
 #![feature(generic_const_exprs)]
+//#![feature(stmt_expr_attributes)]
+//#![feature(const_slice_index)]
+//#![feature(const_try)]
+//#![feature(const_option)]
+//#![feature(const_num_from_num)]
+//#![feature(const_result_drop)]
+//#![feature(const_eval_limit)] // https://github.com/rust-lang/rust/issues/93481
+//#![const_eval_limit = "0"]
 
 mod inner_allocator;
 mod mutex;
@@ -206,18 +206,17 @@ where
 }
 
 #[allow(unused_variables)]
-impl const From<BuddyError> for AllocError {
+impl From<BuddyError> for AllocError {
     #[inline(always)]
     fn from(error: BuddyError) -> Self {
         AllocError
     }
 }
 
+// TODO: Reserve blocks
 // TODO: design Realloc & Shrink
 // TODO: Draw nodes to explain the Buddy research update tree
-// TODO: Select location of buddy Metadata
 // TODO: Create test of allowing more memory space to be addressable
-// TODO: Reserve blocks
 // TODO: Create good documentations
 
 // /// Used only for debug purposes
