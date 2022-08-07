@@ -17,7 +17,8 @@ pub const MIN_BUDDY_NB: usize = 4; // arbitrary choice
 const FIRST_INDEX: usize = 1; // index 0 is never used
 
 /// Reference a valid Address Space
-pub struct AddressSpaceRef<'a, const M: usize> {
+/// Inner part of BuddyAllocator and StaticBuddyAllocator
+pub struct InnerBuddy<'a, const M: usize> {
     s: &'a mut [u8],
     m: &'a mut [u8],
     allocable_len: usize,
@@ -49,7 +50,7 @@ where
     }
 }
 
-impl<'a, const M: usize> From<(&'a mut [u8], Option<&'a mut [u8]>)> for AddressSpaceRef<'a, M> {
+impl<'a, const M: usize> From<(&'a mut [u8], Option<&'a mut [u8]>)> for InnerBuddy<'a, M> {
     fn from(refs: (&'a mut [u8], Option<&'a mut [u8]>)) -> Self {
         let allocable_len = refs.0.len();
         let metadata_size = check::<M>(refs.0);
@@ -74,7 +75,7 @@ impl<'a, const M: usize> From<(&'a mut [u8], Option<&'a mut [u8]>)> for AddressS
 }
 
 impl<const SIZE: usize, const M: usize> const From<&'static mut StaticAddressSpace<SIZE, M>>
-    for AddressSpaceRef<'static, M>
+    for InnerBuddy<'static, M>
 where
     [(); SIZE / M * 2]:,
 {
@@ -112,9 +113,6 @@ const fn check<const M: usize>(input: &mut [u8]) -> usize {
     input.len() / M * 2
 }
 
-/// Inner part of BuddyAllocator and StaticBuddyAllocator
-pub struct InnerBuddy<'a, const M: usize>(AddressSpaceRef<'a, M>);
-
 #[derive(Debug, Copy, Clone)]
 pub struct BuddySize<const M: usize>(pub usize);
 #[derive(Debug, Copy, Clone)]
@@ -126,37 +124,6 @@ enum Op {
 }
 
 impl<'a, const M: usize> InnerBuddy<'a, M> {
-    /// TODO
-    pub const fn new(address_space_ref: AddressSpaceRef<'a, M>) -> Self {
-        Self(address_space_ref)
-    }
-    /// Alloue un nouvel objet selon le layout et retourne son addresse.
-    #[inline(always)]
-    pub fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, BuddyError> {
-        self.0.check_metadata();
-        self.0.alloc(layout)
-    }
-    /// Desalloue un objet prealablement alloue.
-    #[inline(always)]
-    pub fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) -> Result<(), BuddyError> {
-        self.0.check_metadata();
-        self.0.dealloc(ptr, layout)
-    }
-    /// TODO
-    #[inline(always)]
-    pub fn reserve(&mut self, _index: usize, _size: usize) -> Result<(), BuddyError> {
-        self.0.check_metadata();
-        unimplemented!();
-    }
-    /// TODO
-    #[inline(always)]
-    pub fn unreserve(&mut self, _index: usize) -> Result<(), BuddyError> {
-        self.0.check_metadata();
-        unimplemented!();
-    }
-}
-
-impl<'a, const M: usize> AddressSpaceRef<'a, M> {
     /// Check if metadata are already writed
     #[inline(always)]
     fn check_metadata(&mut self) {
@@ -205,8 +172,10 @@ impl<'a, const M: usize> AddressSpaceRef<'a, M> {
         }
         self.m[0] = 0xff; // Mark metadata done
     }
+    /// TODO
     #[inline(always)]
-    fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, BuddyError> {
+    pub fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, BuddyError> {
+        self.check_metadata();
         let buddy_size = BuddySize::<M>::try_from(layout)?;
         let order = Order::try_from((buddy_size, BuddySize(self.allocable_len)))?;
         let index = self.set_mark(order)?;
@@ -223,8 +192,10 @@ impl<'a, const M: usize> AddressSpaceRef<'a, M> {
                 .unwrap(),
         ))
     }
+    /// TODO
     #[inline(always)]
-    fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) -> Result<(), BuddyError> {
+    pub fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) -> Result<(), BuddyError> {
+        self.check_metadata();
         let order = Order::try_from((
             BuddySize::try_from(layout)?,
             BuddySize::<M>(self.allocable_len),
@@ -250,6 +221,20 @@ impl<'a, const M: usize> AddressSpaceRef<'a, M> {
             + (alloc_offset as u128 * (1 << order.0) as u128 / self.allocable_len as u128) as usize;
         self.unset_mark(order, index)
     }
+
+    /// TODO
+    #[inline(always)]
+    pub fn reserve(&mut self, _index: usize, _size: usize) -> Result<(), BuddyError> {
+        self.check_metadata();
+        unimplemented!();
+    }
+    /// TODO
+    #[inline(always)]
+    pub fn unreserve(&mut self, _index: usize) -> Result<(), BuddyError> {
+        self.check_metadata();
+        unimplemented!();
+    }
+
     #[inline(always)]
     fn set_mark(&mut self, order: Order) -> Result<usize, BuddyError> {
         if order.0 < self.m[FIRST_INDEX] {

@@ -35,9 +35,7 @@ use std::alloc::handle_alloc_error;
 /// These traits are exported to implement with your own Mutex
 pub use mutex::RwMutex;
 
-pub use inner_allocator::BuddyError;
-// pub use inner_allocator::{AddressSpaceRef, InnerBuddy, StaticAddressSpace};
-pub use inner_allocator::{AddressSpaceRef, InnerBuddy};
+pub use inner_allocator::{BuddyError, InnerBuddy};
 pub use inner_allocator::{MAX_SUPPORTED_ALIGN, MIN_BUDDY_NB, MIN_CELL_LEN};
 
 /// Buddy Allocator

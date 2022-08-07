@@ -15,7 +15,7 @@ mod allocator {
         struct MemChunk([u8; 256]);
         let mut chunk = MemChunk([0; 256]);
         let alloc = ClonableBuddy::new(Arc::new(ProtectedBuddy::new(
-            Mutex::new(InnerBuddy::<64>::new((chunk.0.as_mut_slice(), None).into())),
+            Mutex::<InnerBuddy<MIN_CELL_LEN>>::new((chunk.0.as_mut_slice(), None).into()),
             None,
         )));
 
@@ -43,9 +43,7 @@ mod allocator {
         struct MemChunk([u8; MIN_CELL_LEN * MIN_BUDDY_NB]);
         let mut chunk = MemChunk([0; MIN_CELL_LEN * MIN_BUDDY_NB]);
         let alloc = ClonableBuddy::new(Arc::new(ProtectedBuddy::new(
-            Mutex::new(InnerBuddy::<MIN_CELL_LEN>::new(
-                (chunk.0.as_mut_slice(), None).into(),
-            )),
+            Mutex::<InnerBuddy<MIN_CELL_LEN>>::new((chunk.0.as_mut_slice(), None).into()),
             None,
         )));
         let mut v = Vec::new();
@@ -67,9 +65,7 @@ mod allocator {
         struct MemChunk([u8; MIN_CELL_LEN * MIN_BUDDY_NB * 2]);
         let mut chunk = MemChunk([0; MIN_CELL_LEN * MIN_BUDDY_NB * 2]);
         let alloc = ClonableBuddy::new(Arc::new(ProtectedBuddy::new(
-            Mutex::new(InnerBuddy::<{ MIN_CELL_LEN * 2 }>::new(
-                (chunk.0.as_mut_slice(), None).into(),
-            )),
+            Mutex::<InnerBuddy<{ MIN_CELL_LEN * 2 }>>::new((chunk.0.as_mut_slice(), None).into()),
             None,
         )));
         let mut v = Vec::new();
@@ -144,9 +140,9 @@ mod allocator {
         srand_init(10);
         for _ in 0..4 {
             let alloc = ClonableBuddy::new(Arc::new(ProtectedBuddy::new(
-                Mutex::new(InnerBuddy::<64>::new(unsafe {
+                Mutex::<InnerBuddy<MIN_CELL_LEN>>::new(unsafe {
                     (CHUNK.0.as_mut_slice(), None).into()
-                })),
+                }),
                 Some(|e| {
                     dbg!(e);
                 }),
@@ -166,7 +162,7 @@ mod allocator {
         let refer = &mut aligned_memory[0].0;
         let refer_static = unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(refer) };
         let alloc = ClonableBuddy::new(Arc::new(ProtectedBuddy::new(
-            Mutex::new(InnerBuddy::<64>::new((refer_static, None).into())),
+            Mutex::<InnerBuddy<MIN_CELL_LEN>>::new((refer_static, None).into()),
             Some(|e| {
                 dbg!(e);
             }),
@@ -188,7 +184,7 @@ mod allocator {
         StaticAddressSpace::new();
     static STATIC_ALLOCATOR: ProtectedBuddy<Mutex<InnerBuddy<MIN_CELL_LEN>>, MIN_CELL_LEN> =
         ProtectedBuddy::new(
-            Mutex::new(InnerBuddy::new(unsafe { (&mut STATIC_SPACE).into() })),
+            Mutex::new(unsafe { (&mut STATIC_SPACE).into() }),
             Some(|e| {
                 dbg!(<BuddyError as Into<&str>>::into(e));
             }),
@@ -321,7 +317,7 @@ mod constructor {
     #[test]
     fn minimal_mem_block() {
         drop(<(&mut [u8], Option<&mut [u8]>) as Into<
-            AddressSpaceRef<MIN_CELL_LEN>,
+            InnerBuddy<MIN_CELL_LEN>,
         >>::into((
             unsafe { &mut MEMORY_FIELD.array[..MIN_CELL_LEN * MIN_BUDDY_NB] },
             None,
@@ -331,7 +327,7 @@ mod constructor {
     #[test]
     fn too_small_mem_block() {
         drop(<(&mut [u8], Option<&mut [u8]>) as Into<
-            AddressSpaceRef<MIN_CELL_LEN>,
+            InnerBuddy<MIN_CELL_LEN>,
         >>::into((
             unsafe { &mut MEMORY_FIELD.array[..MIN_CELL_LEN] },
             None,
@@ -340,7 +336,7 @@ mod constructor {
     #[test]
     fn maximal_mem_block() {
         drop(<(&mut [u8], Option<&mut [u8]>) as Into<
-            AddressSpaceRef<MIN_CELL_LEN>,
+            InnerBuddy<MIN_CELL_LEN>,
         >>::into((
             unsafe {
                 std::slice::from_raw_parts_mut(MEMORY_FIELD.array.as_mut_ptr(), MEMORY_FIELD_SIZE)
@@ -352,7 +348,7 @@ mod constructor {
     #[test]
     fn too_big_mem_block() {
         drop(<(&mut [u8], Option<&mut [u8]>) as Into<
-            AddressSpaceRef<MIN_CELL_LEN>,
+            InnerBuddy<MIN_CELL_LEN>,
         >>::into((
             unsafe {
                 std::slice::from_raw_parts_mut(
@@ -366,7 +362,7 @@ mod constructor {
     #[test]
     fn aligned_mem_block1() {
         drop(<(&mut [u8], Option<&mut [u8]>) as Into<
-            AddressSpaceRef<MIN_CELL_LEN>,
+            InnerBuddy<MIN_CELL_LEN>,
         >>::into((
             unsafe {
                 &mut MEMORY_FIELD.array[MIN_CELL_LEN * 20..MIN_CELL_LEN * (20 + MIN_BUDDY_NB)]
@@ -378,7 +374,7 @@ mod constructor {
     #[test]
     fn bad_aligned_mem_block1() {
         drop(<(&mut [u8], Option<&mut [u8]>) as Into<
-            AddressSpaceRef<MIN_CELL_LEN>,
+            InnerBuddy<MIN_CELL_LEN>,
         >>::into((
             unsafe { &mut MEMORY_FIELD.array[4..MIN_CELL_LEN * 2 + 4] },
             None,
@@ -387,7 +383,7 @@ mod constructor {
     #[test]
     fn aligned_mem_block2() {
         drop(<(&mut [u8], Option<&mut [u8]>) as Into<
-            AddressSpaceRef<MIN_CELL_LEN>,
+            InnerBuddy<MIN_CELL_LEN>,
         >>::into((
             unsafe { &mut MEMORY_FIELD.array[MIN_CELL_LEN * 8..MIN_CELL_LEN * 16] },
             None,
@@ -397,7 +393,7 @@ mod constructor {
     #[test]
     fn bad_aligned_mem_block2() {
         drop(<(&mut [u8], Option<&mut [u8]>) as Into<
-            AddressSpaceRef<MIN_CELL_LEN>,
+            InnerBuddy<MIN_CELL_LEN>,
         >>::into((
             unsafe { &mut MEMORY_FIELD.array[MIN_CELL_LEN * 9..MIN_CELL_LEN * 17] },
             None,
@@ -406,7 +402,7 @@ mod constructor {
     #[test]
     fn aligned_mem_block3() {
         drop(<(&mut [u8], Option<&mut [u8]>) as Into<
-            AddressSpaceRef<MIN_CELL_LEN>,
+            InnerBuddy<MIN_CELL_LEN>,
         >>::into((
             unsafe { &mut MEMORY_FIELD.array[MAX_SUPPORTED_ALIGN..MAX_SUPPORTED_ALIGN * 17] },
             None,
@@ -416,7 +412,7 @@ mod constructor {
     #[test]
     fn bad_aligned_mem_block3() {
         drop(<(&mut [u8], Option<&mut [u8]>) as Into<
-            AddressSpaceRef<MIN_CELL_LEN>,
+            InnerBuddy<MIN_CELL_LEN>,
         >>::into((
             unsafe {
                 &mut MEMORY_FIELD.array[(MAX_SUPPORTED_ALIGN / 2)
@@ -428,7 +424,7 @@ mod constructor {
     #[test]
     fn generic_size_changed() {
         drop(<(&mut [u8], Option<&mut [u8]>) as Into<
-            AddressSpaceRef<{ MIN_CELL_LEN * 2 }>,
+            InnerBuddy<{ MIN_CELL_LEN * 2 }>,
         >>::into((
             unsafe { &mut MEMORY_FIELD.array[..MIN_CELL_LEN * MIN_BUDDY_NB * 2] },
             None,
@@ -438,7 +434,7 @@ mod constructor {
     #[test]
     fn generic_below_min_size() {
         drop(<(&mut [u8], Option<&mut [u8]>) as Into<
-            AddressSpaceRef<{ MIN_CELL_LEN / 2 }>,
+            InnerBuddy<{ MIN_CELL_LEN / 2 }>,
         >>::into((
             unsafe { &mut MEMORY_FIELD.array[..MIN_CELL_LEN * MIN_BUDDY_NB] },
             None,
@@ -448,7 +444,7 @@ mod constructor {
     #[test]
     fn generic_above_min_size() {
         drop(<(&mut [u8], Option<&mut [u8]>) as Into<
-            AddressSpaceRef<MEMORY_FIELD_SIZE>,
+            InnerBuddy<MEMORY_FIELD_SIZE>,
         >>::into((
             unsafe { &mut MEMORY_FIELD.array[..MEMORY_FIELD_SIZE] },
             None,
@@ -458,7 +454,7 @@ mod constructor {
     #[test]
     fn generic_unaligned_min_size() {
         drop(<(&mut [u8], Option<&mut [u8]>) as Into<
-            AddressSpaceRef<{ MIN_CELL_LEN / 2 * 3 }>,
+            InnerBuddy<{ MIN_CELL_LEN / 2 * 3 }>,
         >>::into((
             (unsafe { &mut MEMORY_FIELD.array[..MEMORY_FIELD_SIZE] }),
             None,
