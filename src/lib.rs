@@ -46,7 +46,7 @@ pub struct ClonableBuddy<
     X: RwMutex<InnerBuddy<'a, M>> + Send + Sync,
     const M: usize,
 > {
-    static_allocator: T,
+    protected_allocator: T,
     phantom: PhantomData<&'a X>,
 }
 
@@ -56,31 +56,53 @@ where
     X: RwMutex<InnerBuddy<'a, M>> + Send + Sync,
 {
     /// Create a new Buddy Allocator
-    pub fn new(static_allocator: T) -> Self {
+    pub fn new(protected_allocator: T) -> Self {
         Self {
-            static_allocator,
+            protected_allocator,
             phantom: PhantomData,
         }
     }
     /// Allocate memory: should help for a global allocator implementation
     #[inline(always)]
     pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, BuddyError> {
-        self.static_allocator.allocate(layout)
+        self.protected_allocator.allocate(layout)
     }
     /// Deallocate memory: should help for a global allocator implementation
     #[inline(always)]
     pub fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) -> Result<(), BuddyError> {
-        self.static_allocator.deallocate(ptr, layout)
+        self.protected_allocator.deallocate(ptr, layout)
+    }
+    /// Attempts to shrink the memory block
+    #[inline(always)]
+    pub fn shrink(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, BuddyError> {
+        self.protected_allocator.shrink(ptr, old_layout, new_layout)
+    }
+    /// Attempts to extend the memory block.
+    #[inline(always)]
+    pub fn grow(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+        zeroed: bool,
+    ) -> Result<NonNull<[u8]>, BuddyError> {
+        self.protected_allocator
+            .grow(ptr, old_layout, new_layout, zeroed)
     }
     /// TODO
     #[inline(always)]
     pub fn reserve(&self, index: usize, size: usize) -> Result<(), BuddyError> {
-        self.static_allocator.reserve(index, size)
+        self.protected_allocator.reserve(index, size)
     }
     /// TODO
     #[inline(always)]
     pub fn unreserve(&self, index: usize) -> Result<(), BuddyError> {
-        self.static_allocator.unreserve(index)
+        self.protected_allocator.unreserve(index)
     }
 }
 
@@ -92,7 +114,7 @@ where
 {
     fn clone(&self) -> Self {
         Self {
-            static_allocator: self.static_allocator.clone(),
+            protected_allocator: self.protected_allocator.clone(),
             phantom: PhantomData,
         }
     }
@@ -108,6 +130,33 @@ where
     }
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         self.deallocate(ptr, layout).unwrap();
+    }
+    unsafe fn shrink(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        self.shrink(ptr, old_layout, new_layout)
+            .map_err(|e| e.into())
+    }
+    unsafe fn grow(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        self.grow(ptr, old_layout, new_layout, false)
+            .map_err(|e| e.into())
+    }
+    unsafe fn grow_zeroed(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        self.grow(ptr, old_layout, new_layout, true)
+            .map_err(|e| e.into())
     }
 }
 
@@ -148,6 +197,37 @@ where
             .lock_mut(|r| r.dealloc(ptr, layout).map_err(|e| self.check(e)))
             .unwrap()
     }
+    /// Attempts to shrink the memory block
+    #[inline(always)]
+    pub fn shrink(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, BuddyError> {
+        self.data
+            .lock_mut(|r| {
+                r.shrink(ptr, old_layout, new_layout)
+                    .map_err(|e| self.check(e))
+            })
+            .unwrap()
+    }
+    /// Attempts to extend the memory block
+    #[inline(always)]
+    pub fn grow(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+        zeroed: bool,
+    ) -> Result<NonNull<[u8]>, BuddyError> {
+        self.data
+            .lock_mut(|r| {
+                r.grow(ptr, old_layout, new_layout, zeroed)
+                    .map_err(|e| self.check(e))
+            })
+            .unwrap()
+    }
     /// TODO
     #[inline(always)]
     pub fn reserve(&self, index: usize, size: usize) -> Result<(), BuddyError> {
@@ -181,6 +261,33 @@ where
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         self.deallocate(ptr, layout).unwrap();
     }
+    unsafe fn shrink(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        self.shrink(ptr, old_layout, new_layout)
+            .map_err(|e| e.into())
+    }
+    unsafe fn grow(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        self.grow(ptr, old_layout, new_layout, false)
+            .map_err(|e| e.into())
+    }
+    unsafe fn grow_zeroed(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        self.grow(ptr, old_layout, new_layout, true)
+            .map_err(|e| e.into())
+    }
 }
 
 unsafe impl<'a, X, const M: usize> GlobalAlloc for ProtectedBuddy<'a, X, M>
@@ -201,6 +308,30 @@ where
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         self.deallocate(NonNull::new(ptr).unwrap(), layout).unwrap();
     }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let new_layout = Layout::from_size_align(new_size, layout.align());
+        match new_layout {
+            Err(_) => handle_global_alloc_error(layout),
+            Ok(new_layout) => {
+                let result = if new_layout.size() > layout.size() {
+                    self.grow(NonNull::new(ptr).unwrap(), layout, new_layout, false)
+                } else {
+                    self.shrink(NonNull::new(ptr).unwrap(), layout, new_layout)
+                };
+                match result {
+                    Ok(non_null) => non_null.as_mut_ptr(),
+                    Err(_e) => handle_global_alloc_error(layout),
+                }
+            }
+        }
+    }
+}
+
+fn handle_global_alloc_error(layout: Layout) -> *mut u8 {
+    #[cfg(not(feature = "no-std"))]
+    handle_alloc_error(layout);
+    #[cfg(feature = "no-std")]
+    null_mut()
 }
 
 #[allow(unused_variables)]

@@ -19,8 +19,8 @@ const FIRST_INDEX: usize = 1; // index 0 is never used
 /// Reference a valid Address Space
 /// Inner part of BuddyAllocator and StaticBuddyAllocator
 pub struct InnerBuddy<'a, const M: usize> {
-    s: &'a mut [u8],
-    m: &'a mut [u8],
+    arena: &'a mut [u8],
+    meta: &'a mut [u8],
     allocable_len: usize,
 }
 
@@ -30,8 +30,8 @@ pub struct StaticAddressSpace<const SIZE: usize, const M: usize>
 where
     [(); SIZE / M * 2]:,
 {
-    s: [u8; SIZE],
-    m: [u8; SIZE / M * 2],
+    arena: [u8; SIZE],
+    meta: [u8; SIZE / M * 2],
 }
 impl<const SIZE: usize, const M: usize> StaticAddressSpace<SIZE, M>
 where
@@ -40,55 +40,10 @@ where
     /// Helper to create static const address space for allocations
     /// Be carefull, static chunks affect hugely the executable's size
     pub const fn new() -> Self {
-        let mut metadata: [u8; SIZE / M * 2] = [0; SIZE / M * 2];
-        let space: [u8; SIZE] = [0; SIZE];
-        metadata[0] = 0x42; // Tell metadata must be writed
-        Self {
-            s: space,
-            m: metadata,
-        }
-    }
-}
-
-impl<'a, const M: usize> From<(&'a mut [u8], Option<&'a mut [u8]>)> for InnerBuddy<'a, M> {
-    fn from(refs: (&'a mut [u8], Option<&'a mut [u8]>)) -> Self {
-        let allocable_len = refs.0.len();
-        let metadata_size = check::<M>(refs.0);
-        let out = if let Some(ref_m) = refs.1 {
-            assert!(metadata_size == ref_m.len());
-            Self {
-                s: refs.0,
-                m: ref_m,
-                allocable_len,
-            }
-        } else {
-            let (m, s) = refs.0.split_at_mut(max!(metadata_size, M));
-            Self {
-                s,
-                m,
-                allocable_len,
-            }
-        };
-        out.m[0] = 0x42; // Tell metadata must be writed
-        out
-    }
-}
-
-impl<const SIZE: usize, const M: usize> const From<&'static mut StaticAddressSpace<SIZE, M>>
-    for InnerBuddy<'static, M>
-where
-    [(); SIZE / M * 2]:,
-{
-    fn from(static_address_space: &'static mut StaticAddressSpace<SIZE, M>) -> Self {
-        let allocable_len = static_address_space.s.len();
-        let out = Self {
-            m: &mut static_address_space.m,
-            s: &mut static_address_space.s,
-            allocable_len,
-        };
-        let metadata_size = check::<M>(out.s);
-        assert!(metadata_size == out.m.len());
-        out
+        let mut meta: [u8; SIZE / M * 2] = [0; SIZE / M * 2];
+        let arena: [u8; SIZE] = [0; SIZE];
+        meta[0] = 0x42; // Tell metadata must be writed
+        Self { arena, meta }
     }
 }
 
@@ -124,13 +79,51 @@ enum Op {
 }
 
 impl<'a, const M: usize> InnerBuddy<'a, M> {
+    /// TODO
+    pub fn new_from_refs(ref_arena: &'a mut [u8], ref_meta: Option<&'a mut [u8]>) -> Self {
+        let allocable_len = ref_arena.len();
+        let metadata_size = check::<M>(ref_arena);
+        let out = if let Some(meta) = ref_meta {
+            Self {
+                arena: ref_arena,
+                meta,
+                allocable_len,
+            }
+        } else {
+            let (meta, arena) = ref_arena.split_at_mut(max!(metadata_size, M));
+            Self {
+                arena,
+                meta,
+                allocable_len,
+            }
+        };
+        out.meta[0] = 0x42; // Tell metadata must be writed
+        out
+    }
+    /// TODO
+    pub const fn new_from_static<const SIZE: usize>(
+        address_space: &'static mut StaticAddressSpace<SIZE, M>,
+    ) -> Self
+    where
+        [(); SIZE / M * 2]:,
+    {
+        let allocable_len = address_space.arena.len();
+        let out = Self {
+            meta: &mut address_space.meta,
+            arena: &mut address_space.arena,
+            allocable_len,
+        };
+        let metadata_size = check::<M>(out.arena);
+        assert!(metadata_size == out.meta.len());
+        out
+    }
     /// Check if metadata are already writed
     #[inline(always)]
     fn check_metadata(&mut self) {
-        if self.m[0] == 0x42 {
+        if self.meta[0] == 0x42 {
             self.write_metadata();
         }
-        debug_assert!(self.m[0] == 0xff);
+        debug_assert!(self.meta[0] == 0xff);
     }
     fn write_metadata(&mut self) {
         let max_order = Order::try_from((BuddySize::<M>(M), BuddySize(self.allocable_len)))
@@ -151,7 +144,7 @@ impl<'a, const M: usize> InnerBuddy<'a, M> {
         let (mut current_order, mut members, mut index) = (0, 2, 0);
         while index < bytes_needed {
             members -= 1;
-            self.m[index] = current_order;
+            self.meta[index] = current_order;
             if members == 0 {
                 current_order += 1;
                 members = 1 << current_order;
@@ -159,7 +152,7 @@ impl<'a, const M: usize> InnerBuddy<'a, M> {
             index += 1;
         }
         // ___ Bootstrap memory for metadata ___
-        if self.allocable_len != self.s.len() {
+        if self.allocable_len != self.arena.len() {
             let metadata_chunk_size = max!(bytes_needed, M);
             let order = Order::try_from((
                 BuddySize::<M>(metadata_chunk_size),
@@ -170,7 +163,7 @@ impl<'a, const M: usize> InnerBuddy<'a, M> {
                 .ok()
                 .expect("Woot ? Already insuffisant memory ?!? That Buddy Allocator sucks !");
         }
-        self.m[0] = 0xff; // Mark metadata done
+        self.meta[0] = 0xff; // Mark metadata done
     }
     /// TODO
     #[inline(always)]
@@ -181,13 +174,13 @@ impl<'a, const M: usize> InnerBuddy<'a, M> {
         let index = self.set_mark(order)?;
         // ___ Calculate the pointer offset of the coresponding memory chunk ___
         let mut alloc_offset = self.allocable_len / (1 << order.0) * (index & ((1 << order.0) - 1));
-        if self.allocable_len != self.s.len() {
+        if self.allocable_len != self.arena.len() {
             // case metadata into allocated memory area
-            alloc_offset -= self.m.len();
+            alloc_offset -= self.meta.len();
         }
         // ___ Report changes on parents ___
         Ok(NonNull::from(
-            self.s
+            self.arena
                 .get_mut(alloc_offset..alloc_offset + buddy_size.0)
                 .unwrap(),
         ))
@@ -203,12 +196,12 @@ impl<'a, const M: usize> InnerBuddy<'a, M> {
         // L'arythmetique des pointeurs n'est pas possible dans une fonction constante.
         // ___ TODO: Explain that ! ___
         let alloc_offset = usize::from(ptr.addr())
-            - if self.allocable_len != self.s.len() {
+            - if self.allocable_len != self.arena.len() {
                 // case metadata into allocated memory area
-                self.m.get(0).unwrap()
+                self.meta.get(0).unwrap()
             } else {
                 // case metadata outside allocated memory area
-                self.s.get(0).unwrap()
+                self.arena.get(0).unwrap()
             } as *const u8 as usize;
         let start_idx = 1 << order.0;
         // Cast as u64 to avoid mul overflow on 32bits target
@@ -221,7 +214,27 @@ impl<'a, const M: usize> InnerBuddy<'a, M> {
             + (alloc_offset as u128 * (1 << order.0) as u128 / self.allocable_len as u128) as usize;
         self.unset_mark(order, index)
     }
-
+    /// TODO
+    pub fn shrink(
+        &mut self,
+        _ptr: NonNull<u8>,
+        _old_layout: Layout,
+        _new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, BuddyError> {
+        self.check_metadata();
+        unimplemented!();
+    }
+    /// TODO
+    pub fn grow(
+        &mut self,
+        _ptr: NonNull<u8>,
+        _old_layout: Layout,
+        _new_layout: Layout,
+        _zeroed: bool,
+    ) -> Result<NonNull<[u8]>, BuddyError> {
+        self.check_metadata();
+        unimplemented!();
+    }
     /// TODO
     #[inline(always)]
     pub fn reserve(&mut self, _index: usize, _size: usize) -> Result<(), BuddyError> {
@@ -237,25 +250,25 @@ impl<'a, const M: usize> InnerBuddy<'a, M> {
 
     #[inline(always)]
     fn set_mark(&mut self, order: Order) -> Result<usize, BuddyError> {
-        if order.0 < self.m[FIRST_INDEX] {
+        if order.0 < self.meta[FIRST_INDEX] {
             Err(BuddyError::NoMoreSpace)
         } else {
             let (mut index, mut current_order) = (FIRST_INDEX, 0); // Begin on index 1
             while current_order < order.0 {
                 // ___ Find the best fited block ___
-                index = if self.m[2 * index] <= order.0 {
+                index = if self.meta[2 * index] <= order.0 {
                     2 * index // 2n --> binary heap
                 } else {
                     2 * index + 1 // 2n + 1 --> binary heap
                 };
                 debug_assert!(
-                    current_order < self.m[index],
+                    current_order < self.meta[index],
                     "Woot ? That's definitively sucks"
                 );
                 current_order += 1;
             }
             // ___ Mark as occupied with 0x80 then mark order as 'max order' + 1 ___
-            self.m[index] = 0x80
+            self.meta[index] = 0x80
                 + Order::try_from((BuddySize::<M>(M), BuddySize(self.allocable_len)))
                     .ok()
                     .expect("Woot ? Should be already checked !")
@@ -267,11 +280,11 @@ impl<'a, const M: usize> InnerBuddy<'a, M> {
     }
     #[inline(always)]
     fn unset_mark(&mut self, order: Order, index: usize) -> Result<(), BuddyError> {
-        if self.m[index] & 0x80 == 0 {
+        if self.meta[index] & 0x80 == 0 {
             Err(BuddyError::DoubleFreeOrCorruption)
         } else {
             // ___ Mark as free, like original value ___
-            self.m[index] = order.0;
+            self.meta[index] = order.0;
             // ___ Report changes on parents ___
             self.modify_parents(index, order, Op::Deallocate);
             Ok(())
@@ -284,17 +297,17 @@ impl<'a, const M: usize> InnerBuddy<'a, M> {
             let child_left = 2 * parent;
             let child_right = child_left + 1;
             let new_indice = match op {
-                Op::Allocate => min!(self.m[child_left] & 0x7f, self.m[child_right] & 0x7f),
+                Op::Allocate => min!(self.meta[child_left] & 0x7f, self.meta[child_right] & 0x7f),
                 Op::Deallocate => {
-                    if self.m[child_left] == order.0 && self.m[child_right] == order.0 {
+                    if self.meta[child_left] == order.0 && self.meta[child_right] == order.0 {
                         order.0 - 1
                     } else {
-                        min!(self.m[child_left] & 0x7f, self.m[child_right] & 0x7f)
+                        min!(self.meta[child_left] & 0x7f, self.meta[child_right] & 0x7f)
                     }
                 }
             };
-            if self.m[parent] != new_indice {
-                self.m[parent] = new_indice;
+            if self.meta[parent] != new_indice {
+                self.meta[parent] = new_indice;
             } else {
                 break; // Job finished
             }

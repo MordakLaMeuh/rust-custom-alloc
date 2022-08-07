@@ -15,7 +15,10 @@ mod allocator {
         struct MemChunk([u8; 256]);
         let mut chunk = MemChunk([0; 256]);
         let alloc = ClonableBuddy::new(Arc::new(ProtectedBuddy::new(
-            Mutex::<InnerBuddy<MIN_CELL_LEN>>::new((chunk.0.as_mut_slice(), None).into()),
+            Mutex::new(InnerBuddy::<MIN_CELL_LEN>::new_from_refs(
+                chunk.0.as_mut_slice(),
+                None,
+            )),
             None,
         )));
 
@@ -43,7 +46,10 @@ mod allocator {
         struct MemChunk([u8; MIN_CELL_LEN * MIN_BUDDY_NB]);
         let mut chunk = MemChunk([0; MIN_CELL_LEN * MIN_BUDDY_NB]);
         let alloc = ClonableBuddy::new(Arc::new(ProtectedBuddy::new(
-            Mutex::<InnerBuddy<MIN_CELL_LEN>>::new((chunk.0.as_mut_slice(), None).into()),
+            Mutex::new(InnerBuddy::<MIN_CELL_LEN>::new_from_refs(
+                chunk.0.as_mut_slice(),
+                None,
+            )),
             None,
         )));
         let mut v = Vec::new();
@@ -65,7 +71,10 @@ mod allocator {
         struct MemChunk([u8; MIN_CELL_LEN * MIN_BUDDY_NB * 2]);
         let mut chunk = MemChunk([0; MIN_CELL_LEN * MIN_BUDDY_NB * 2]);
         let alloc = ClonableBuddy::new(Arc::new(ProtectedBuddy::new(
-            Mutex::<InnerBuddy<{ MIN_CELL_LEN * 2 }>>::new((chunk.0.as_mut_slice(), None).into()),
+            Mutex::new(InnerBuddy::<{ MIN_CELL_LEN * 2 }>::new_from_refs(
+                chunk.0.as_mut_slice(),
+                None,
+            )),
             None,
         )));
         let mut v = Vec::new();
@@ -140,13 +149,15 @@ mod allocator {
         srand_init(10);
         for _ in 0..4 {
             let alloc = ClonableBuddy::new(Arc::new(ProtectedBuddy::new(
-                Mutex::<InnerBuddy<MIN_CELL_LEN>>::new(unsafe {
-                    (CHUNK.0.as_mut_slice(), None).into()
-                }),
+                Mutex::new(InnerBuddy::<MIN_CELL_LEN>::new_from_refs(
+                    unsafe { CHUNK.0.as_mut_slice() },
+                    None,
+                )),
                 Some(|e| {
                     dbg!(e);
                 }),
             )));
+
             repeat_test(&alloc);
             final_test(&alloc);
         }
@@ -162,7 +173,10 @@ mod allocator {
         let refer = &mut aligned_memory[0].0;
         let refer_static = unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(refer) };
         let alloc = ClonableBuddy::new(Arc::new(ProtectedBuddy::new(
-            Mutex::<InnerBuddy<MIN_CELL_LEN>>::new((refer_static, None).into()),
+            Mutex::new(InnerBuddy::<MIN_CELL_LEN>::new_from_refs(
+                refer_static,
+                None,
+            )),
             Some(|e| {
                 dbg!(e);
             }),
@@ -184,7 +198,9 @@ mod allocator {
         StaticAddressSpace::new();
     static STATIC_ALLOCATOR: ProtectedBuddy<Mutex<InnerBuddy<MIN_CELL_LEN>>, MIN_CELL_LEN> =
         ProtectedBuddy::new(
-            Mutex::new(unsafe { (&mut STATIC_SPACE).into() }),
+            Mutex::new(InnerBuddy::<MIN_CELL_LEN>::new_from_static(unsafe {
+                &mut STATIC_SPACE
+            })),
             Some(|e| {
                 dbg!(<BuddyError as Into<&str>>::into(e));
             }),
@@ -304,6 +320,7 @@ mod order_convert {
         .unwrap();
     }
 }
+#[cfg(none)]
 mod constructor {
     use super::*;
     const MEMORY_FIELD_SIZE: usize = 0x4000_0000;
