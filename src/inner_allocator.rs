@@ -18,7 +18,7 @@ const FIRST_INDEX: usize = 1; // index 0 is never used
 
 /// Reference a valid Address Space
 /// Inner part of BuddyAllocator and StaticBuddyAllocator
-pub struct InnerBuddy<'a, const M: usize> {
+pub struct InnerAllocator<'a, const M: usize> {
     arena: &'a mut [u8],
     meta: &'a mut [u8],
     allocable_len: usize,
@@ -78,7 +78,7 @@ enum Op {
     Deallocate,
 }
 
-impl<'a, const M: usize> InnerBuddy<'a, M> {
+impl<'a, const M: usize> InnerAllocator<'a, M> {
     /// TODO
     pub fn new_from_refs(ref_arena: &'a mut [u8], ref_meta: Option<&'a mut [u8]>) -> Self {
         let allocable_len = ref_arena.len();
